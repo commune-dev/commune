@@ -1,5 +1,6 @@
 import { MongoClient, type Db, type Collection, type Document } from 'mongodb';
 import type { Organization, User, ApiKey, EmailVerificationToken, Session, AgentIdentity, AgentSignup, AgentSignatureNonce } from './types';
+import type { PhoneNumber, SmsSuppression } from './types/phone';
 
 const uri = process.env.MONGO_URL;
 let client: MongoClient | null = null;
@@ -27,6 +28,8 @@ export const connect = async (): Promise<Db | null> => {
         client = new MongoClient(uri, {
           serverSelectionTimeoutMS: 15000,
           connectTimeoutMS: 15000,
+          socketTimeoutMS: 45000,
+          maxIdleTimeMS: 30000,
           retryWrites: true,
           retryReads: true,
         });
@@ -126,5 +129,31 @@ export const setupCollections = async (db: Db) => {
   await db.createCollection<AgentSignatureNonce>('agent_signature_nonces');
   await db.collection('agent_signature_nonces').createIndexes([
     { key: { expiresAt: 1 }, expireAfterSeconds: 0 }  // TTL: auto-delete after 2 minutes
+  ]);
+
+  // ─── Phone Numbers ─────────────────────────────────────────────
+  await db.createCollection<PhoneNumber>('phone_numbers');
+  await db.collection('phone_numbers').createIndexes([
+    { key: { id: 1 }, unique: true },
+    { key: { orgId: 1 } },
+    { key: { twilioSid: 1 }, unique: true },
+    { key: { number: 1, orgId: 1 }, unique: true },
+    { key: { status: 1 } },
+    { key: { orgId: 1, status: 1 } },         // quota counting
+    { key: { orgId: 1, releasedAt: 1 } },     // cooldown check
+  ]);
+
+  // ─── SMS Suppressions (opt-out tracking) ───────────────────────
+  await db.createCollection<SmsSuppression>('sms_suppressions');
+  await db.collection('sms_suppressions').createIndexes([
+    { key: { orgId: 1, phoneNumber: 1 }, unique: true },
+    { key: { phoneNumberId: 1 } },
+  ]);
+
+  // ─── SMS Webhook Idempotency (Twilio retries for 24h; TTL 7 days) ──
+  await db.createCollection('sms_duplicates');
+  await db.collection('sms_duplicates').createIndexes([
+    { key: { messageSid: 1 }, unique: true },
+    { key: { processedAt: 1 }, expireAfterSeconds: 7 * 24 * 60 * 60 }, // 7-day TTL
   ]);
 };
