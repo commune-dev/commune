@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import webhookDeliveryStore from '../stores/webhookDeliveryStore';
 import type { WebhookDeliveryAttempt, WebhookDeliveryStatus } from '../types';
 import logger from '../utils/logger';
+import { getRedisClient } from '../lib/redis';
 
 // ─── Configuration ──────────────────────────────────────────────────────────────
 
@@ -56,7 +57,7 @@ const recordFailure = (endpoint: string): void => {
   state.consecutive_failures++;
   if (state.consecutive_failures >= CIRCUIT_BREAKER_THRESHOLD) {
     state.open_until = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
-    console.warn(`⚡ Circuit breaker OPEN for endpoint: ${endpoint} (${state.consecutive_failures} consecutive failures, cooldown ${CIRCUIT_BREAKER_COOLDOWN_MS / 1000}s)`);
+    logger.warn('Circuit breaker OPEN for endpoint', { endpoint, consecutiveFailures: state.consecutive_failures, cooldownSeconds: CIRCUIT_BREAKER_COOLDOWN_MS / 1000 });
   }
 };
 
@@ -252,7 +253,7 @@ const deliverWebhook = async (params: {
       next_retry_at: null,
       dead_at: new Date().toISOString(),
     });
-    console.error(`💀 Webhook dead after 1 attempt`, { deliveryId, endpoint, error: result.error });
+    logger.error('Webhook dead after 1 attempt', { deliveryId, endpoint, error: result.error });
     return { delivery_id: deliveryId, delivered: false };
   }
 
@@ -261,13 +262,13 @@ const deliverWebhook = async (params: {
     next_retry_at: retryAt,
   });
 
-  console.warn(`⚠️ Webhook delivery failed, scheduled retry`, {
+  logger.warn('Webhook delivery failed, scheduled retry', {
     deliveryId,
     endpoint,
     error: result.error,
     statusCode: result.status_code,
     nextRetryAt: retryAt,
-    latency: `${result.latency_ms}ms`,
+    latencyMs: result.latency_ms,
   });
 
   return { delivery_id: deliveryId, delivered: false };
@@ -419,6 +420,18 @@ const startRetryWorker = (): void => {
 
   retryWorkerHandle = setInterval(async () => {
     try {
+      const redis = getRedisClient();
+      if (redis) {
+        const replicaId = process.env.RAILWAY_REPLICA_ID || `local-${process.pid}`;
+        const lockKey = 'webhook:retry:leader';
+        const lockTtl = RETRY_WORKER_INTERVAL_MS + 5000; // interval + buffer
+
+        const acquired = await redis.set(lockKey, replicaId, 'PX', lockTtl, 'NX');
+        if (!acquired) {
+          return; // another replica is handling this cycle
+        }
+      }
+
       const processed = await processRetryBatch();
       if (processed > 0) {
         logger.debug('Retry worker processed deliveries', { count: processed });

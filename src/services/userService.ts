@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { randomBytes } from 'crypto';
 import type { User, EmailVerificationToken } from '../types';
 import { getCollection } from '../db';
+import logger from '../utils/logger';
 
 const JWT_SECRET = process.env.JWT_SECRET || '';
 
@@ -32,7 +33,7 @@ const sendEmail = async (payload: {
   });
 
   if (error) {
-    console.error('Failed to send email:', error);
+    logger.error('Failed to send email:', { error });
     throw error;
   }
 

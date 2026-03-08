@@ -15,3 +15,6 @@ export type { SvixHeaders, InboundEmailWebhookPayload } from './webhooks';
 
 // Re-export deletion types
 export * from './deletion';
+
+// Re-export phone / SMS types
+export * from './phone';

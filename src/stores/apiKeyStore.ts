@@ -30,6 +30,7 @@ const ensureIndexes = async () => {
   }
 
   await collection.createIndex({ keyHash: 1 }, { unique: true });
+  await collection.createIndex({ keyPrefix: 1, status: 1 });
   await collection.createIndex({ createdAt: -1 });
 };
 

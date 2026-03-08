@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import logger from '../../utils/logger';
 import { UserService } from '../../services/userService';
 import { OrganizationService } from '../../services/organizationService';
 import { GoogleOAuthService } from '../../services/googleOAuthService';
@@ -69,7 +70,7 @@ router.post('/signup', authSignupRateLimiter, async (req, res) => {
       requiresVerification: result.requiresVerification
     });
   } catch (error) {
-    console.error('Registration error:', error);
+    logger.error('Registration error:', { error });
     res.status(400).json({ error: error instanceof Error ? error.message : 'Registration failed' });
   }
 });
@@ -118,7 +119,7 @@ router.post('/register', authSignupRateLimiter, async (req, res) => {
       requiresVerification: result.requiresVerification
     });
   } catch (error) {
-    console.error('Registration error:', error);
+    logger.error('Registration error:', { error });
     res.status(400).json({ error: error instanceof Error ? error.message : 'Registration failed' });
   }
 });
@@ -157,7 +158,7 @@ router.post('/verify', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Email verification error:', error);
+    logger.error('Email verification error:', { error });
     res.status(500).json({ error: 'Verification failed' });
   }
 });
@@ -173,7 +174,7 @@ router.post('/resend', authPasswordResetRateLimiter, async (req, res) => {
     await UserService.resendVerificationEmail(email);
     res.json({ data: { sent: true } });
   } catch (error) {
-    console.error('Resend verification error:', error);
+    logger.error('Resend verification error:', { error });
     res.status(500).json({ error: 'Failed to resend verification' });
   }
 });
@@ -209,7 +210,7 @@ router.get('/verify-email', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Email verification error:', error);
+    logger.error('Email verification error:', { error });
     res.status(500).json({ error: 'Verification failed' });
   }
 });
@@ -250,7 +251,7 @@ router.post('/signin', authLoginRateLimiter, async (req, res) => {
       token: result.token
     });
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error:', { error });
     res.status(500).json({ error: 'Login failed' });
   }
 });
@@ -290,7 +291,7 @@ router.post('/login', authLoginRateLimiter, async (req, res) => {
       token: result.token
     });
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error:', { error });
     res.status(500).json({ error: 'Login failed' });
   }
 });
@@ -310,7 +311,7 @@ router.post('/forgot-password', authPasswordResetRateLimiter, async (req, res) =
     await UserService.createPasswordResetToken(email);
     res.json({ message: 'If an account with that email exists, a password reset link has been sent.' });
   } catch (error) {
-    console.error('Forgot password error:', error);
+    logger.error('Forgot password error:', { error });
     res.status(500).json({ error: 'Failed to process request' });
   }
 });
@@ -333,7 +334,7 @@ router.post('/reset-password', async (req, res) => {
 
     res.json({ message: 'Password reset successfully' });
   } catch (error) {
-    console.error('Reset password error:', error);
+    logger.error('Reset password error:', { error });
     res.status(500).json({ error: 'Failed to reset password' });
   }
 });
@@ -374,7 +375,7 @@ router.post('/refresh', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Refresh error:', error);
+    logger.error('Refresh error:', { error });
     res.status(401).json({ error: 'Invalid token' });
   }
 });
@@ -421,7 +422,7 @@ router.get('/me', async (req, res) => {
       hasOrganization: !!org
     });
   } catch (error) {
-    console.error('Get user error:', error);
+    logger.error('Get user error:', { error });
     res.status(500).json({ error: 'Failed to get user' });
   }
 });
@@ -478,7 +479,7 @@ router.get('/google/callback', async (req, res) => {
     const redirectPath = isNewUser ? '/onboarding' : state;
     res.redirect(`${FRONTEND_URL}/auth/google/callback?token=${encodeURIComponent(token)}&redirect=${encodeURIComponent(redirectPath)}`);
   } catch (error) {
-    console.error('Google OAuth callback error:', error);
+    logger.error('Google OAuth callback error:', { error });
     res.redirect(`${FRONTEND_URL}/auth/login?error=google_auth_failed`);
   }
 });
@@ -524,7 +525,7 @@ router.post('/google/token', async (req, res) => {
       isNewUser,
     });
   } catch (error) {
-    console.error('Google token exchange error:', error);
+    logger.error('Google token exchange error:', { error });
     res.status(500).json({ error: 'Google authentication failed' });
   }
 });

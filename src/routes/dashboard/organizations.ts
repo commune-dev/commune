@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { jwtAuth, AuthenticatedRequest } from '../../middleware/jwtAuth';
 import { OrganizationService } from '../../services/organizationService';
 import { getCollection } from '../../db';
+import logger from '../../utils/logger';
 
 const router = Router();
 
@@ -49,7 +50,7 @@ router.post('/', async (req: AuthenticatedRequest, res) => {
       }
     });
   } catch (error) {
-    console.error('Organization creation error:', error);
+    logger.error('Organization creation error:', { error });
     res.status(400).json({ error: 'Failed to create organization' });
   }
 });
@@ -72,7 +73,7 @@ router.get('/current', async (req: AuthenticatedRequest, res) => {
       }
     });
   } catch (error) {
-    console.error('Organization fetch error:', error);
+    logger.error('Organization fetch error:', { error });
     res.status(500).json({ error: 'Failed to fetch organization' });
   }
 });
@@ -104,7 +105,7 @@ router.patch('/current', async (req: AuthenticatedRequest, res) => {
       }
     });
   } catch (error) {
-    console.error('Organization update error:', error);
+    logger.error('Organization update error:', { error });
     res.status(400).json({ error: 'Failed to update organization' });
   }
 });
@@ -114,7 +115,7 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
     const organizations = await OrganizationService.listOrganizations();
     res.json({ organizations });
   } catch (error) {
-    console.error('Organization list error:', error);
+    logger.error('Organization list error:', { error });
     res.status(500).json({ error: 'Failed to list organizations' });
   }
 });

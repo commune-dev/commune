@@ -1,5 +1,6 @@
 import https from 'https';
 import http from 'http';
+import logger from '../utils/logger';
 
 const GOOGLE_OAUTH_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID || '';
 const GOOGLE_OAUTH_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET || '';
@@ -112,7 +113,7 @@ export class GoogleOAuthService {
     const data = JSON.parse(response);
 
     if (data.error) {
-      console.error('Google OAuth token exchange error:', data);
+      logger.error('Google OAuth token exchange error:', { data });
       throw new Error(`Google OAuth error: ${data.error_description || data.error}`);
     }
 
@@ -132,7 +133,7 @@ export class GoogleOAuthService {
     const data = JSON.parse(response);
 
     if (data.error) {
-      console.error('Google user info error:', data);
+      logger.error('Google user info error:', { data });
       throw new Error(`Failed to fetch Google user info: ${data.error.message || data.error}`);
     }
 

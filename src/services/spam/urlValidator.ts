@@ -92,25 +92,26 @@ export class URLValidator {
         reasons.push('Majority of links are not HTTPS');
       }
 
-      // Check domain authority for suspicious domains
+      // Domain authority check (includes outbound HTTPS fetches via checkSSLCertificate)
+      // Deferred to setImmediate — does not block validateUrls return value
       if (phishingAnalysis.suspicious_domains.length > 0) {
         const uniqueDomains = [...new Set(phishingAnalysis.suspicious_domains)];
-        const authorityResults = await this.domainAuthorityChecker.checkMultipleDomains(
-          uniqueDomains.slice(0, 5) // Limit to 5 domains
-        );
-
-        const lowAuthorityDomains = authorityResults.filter(r => r.authority_score < 0.4);
-        if (lowAuthorityDomains.length > 0) {
-          score += 0.3;
-          reasons.push(`${lowAuthorityDomains.length} low-authority domains detected`);
-          
-          // Add specific domain authority issues
-          for (const result of lowAuthorityDomains) {
-            if (result.reasons.length > 0) {
-              reasons.push(`${result.domain}: ${result.reasons[0]}`);
+        setImmediate(async () => {
+          try {
+            const authorityResults = await this.domainAuthorityChecker.checkMultipleDomains(
+              uniqueDomains.slice(0, 5)
+            );
+            const lowAuthorityDomains = authorityResults.filter(r => r.authority_score < 0.4);
+            if (lowAuthorityDomains.length > 0) {
+              logger.info('Deferred domain authority check: low-authority domains found', {
+                count: lowAuthorityDomains.length,
+                domains: lowAuthorityDomains.map(r => r.domain),
+              });
             }
+          } catch (err) {
+            logger.warn('Deferred domain authority check failed', { error: err });
           }
-        }
+        });
       }
 
       return {

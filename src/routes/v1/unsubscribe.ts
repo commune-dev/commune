@@ -1,6 +1,7 @@
 import { Router, json } from 'express';
 import { verifyUnsubscribeToken } from '../../lib/unsubscribeToken';
 import suppressionStore from '../../stores/suppressionStore';
+import logger from '../../utils/logger';
 
 const router = Router();
 
@@ -44,7 +45,7 @@ router.post('/', json(), async (req, res) => {
     },
   });
 
-  console.log(`One-click unsubscribe: ${payload.recipient} from org ${payload.orgId}`);
+  logger.info('One-click unsubscribe', { recipient: payload.recipient, orgId: payload.orgId });
 
   // RFC 8058 requires 200 response
   return res.status(200).json({ success: true, message: 'Successfully unsubscribed' });

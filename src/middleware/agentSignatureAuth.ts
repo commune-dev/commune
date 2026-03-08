@@ -7,7 +7,16 @@ export interface V1AuthenticatedRequest extends Request {
   orgId?: string;
   agentId?: string;
   apiKey?: string;
-  apiKeyData?: { permissions: string[]; orgId: string; id: string; name: string };
+  apiKeyData?: {
+    permissions: string[];
+    orgId: string;
+    id: string;
+    name: string;
+    scope?: 'master' | 'phone';
+    phoneNumberIds?: string[];
+    limits?: { maxInboxes?: number; maxEmailsPerDay?: number; maxSmsPerDay?: number };
+    isAdmin?: boolean;
+  };
   authType?: 'apikey' | 'agent';
 }
 
@@ -50,6 +59,10 @@ export const v1CombinedAuth = async (
         orgId: result.orgId,
         id: result.apiKey.id,
         name: result.apiKey.name,
+        scope: result.apiKey.scope,
+        phoneNumberIds: result.apiKey.phoneNumberIds,
+        limits: result.apiKey.limits,
+        isAdmin: result.apiKey.isAdmin,
       };
       req.authType = 'apikey';
       next();

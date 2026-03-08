@@ -12,6 +12,14 @@ import deliveryMetricsRoutes from './deliveryMetrics';
 import searchRoutes from './search';
 import webhookDeliveryRoutes from './webhookDeliveries';
 import dataDeletionRoutes from './dataDeletion';
+import phoneNumberRoutes from './phoneNumbers';
+import smsRoutes from './sms';
+import creditsRoutes from './credits';
+import toolsRoutes from './tools';
+import callsRoutes from './calls';
+import voiceAgentRoutes from './voiceAgents';
+import eventsRouter from './events';
+import meRoutes from './me';
 
 const router = Router();
 
@@ -47,5 +55,13 @@ router.use('/delivery', deliveryMetricsRoutes);
 router.use('/search', searchRoutes);
 router.use('/webhooks', webhookDeliveryRoutes);
 router.use('/data', dataDeletionRoutes);
+router.use('/phone-numbers', phoneNumberRoutes);
+router.use('/sms', smsRoutes);
+router.use('/credits', creditsRoutes);
+router.use('/tools', toolsRoutes);
+router.use('/calls', callsRoutes);
+router.use('/phone-numbers', voiceAgentRoutes);
+router.use('/events', eventsRouter);
+router.use('/me', meRoutes);
 
 export default router;

@@ -10,7 +10,7 @@ router.use(jwtAuth);
 
 router.post('/', async (req: AuthenticatedRequest, res) => {
   try {
-    const { name, permissions, expiresIn, limits } = req.body;
+    const { name, permissions, expiresIn, limits, isAdmin } = req.body;
     const userId = req.user!.id;
     const orgId = req.orgId!;
 
@@ -28,7 +28,8 @@ router.post('/', async (req: AuthenticatedRequest, res) => {
       name,
       permissions,
       expiresIn,
-      createdBy: userId
+      createdBy: userId,
+      isAdmin: typeof isAdmin === 'boolean' ? isAdmin : undefined,
     });
 
     res.status(201).json({
@@ -40,7 +41,8 @@ router.post('/', async (req: AuthenticatedRequest, res) => {
         permissions: result.apiKeyData.permissions,
         status: result.apiKeyData.status,
         expiresAt: result.apiKeyData.expiresAt,
-        createdAt: result.apiKeyData.createdAt
+        createdAt: result.apiKeyData.createdAt,
+        isAdmin: result.apiKeyData.isAdmin ?? null,
       }
     });
   } catch (error) {
@@ -63,7 +65,8 @@ router.get('/', async (req: AuthenticatedRequest, res) => {
         status: key.status,
         lastUsedAt: key.lastUsedAt,
         expiresAt: key.expiresAt,
-        createdAt: key.createdAt
+        createdAt: key.createdAt,
+        isAdmin: key.isAdmin ?? null,
       }))
     });
   } catch (error) {
@@ -92,7 +95,8 @@ router.get('/:keyId', async (req: AuthenticatedRequest, res) => {
         lastUsedAt: apiKey.lastUsedAt,
         expiresAt: apiKey.expiresAt,
         createdAt: apiKey.createdAt,
-        updatedAt: apiKey.updatedAt
+        updatedAt: apiKey.updatedAt,
+        isAdmin: apiKey.isAdmin ?? null,
       }
     });
   } catch (error) {
@@ -138,7 +142,8 @@ router.post('/:keyId/rotate', async (req: AuthenticatedRequest, res) => {
         permissions: result.apiKeyData.permissions,
         status: result.apiKeyData.status,
         expiresAt: result.apiKeyData.expiresAt,
-        updatedAt: result.apiKeyData.updatedAt
+        updatedAt: result.apiKeyData.updatedAt,
+        isAdmin: result.apiKeyData.isAdmin ?? null,
       }
     });
   } catch (error) {

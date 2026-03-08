@@ -1,5 +1,6 @@
 import { getCollection } from '../db';
 import monitoringService from './monitoringService';
+import logger from '../utils/logger';
 
 interface CachedMetrics {
   data: any;
@@ -23,7 +24,7 @@ const getActiveInboxes = async (): Promise<string[]> => {
     const deliveryEvents = await getCollection('delivery_events');
     
     if (!messages || !deliveryEvents) {
-      console.error('Database collections not available');
+      logger.error('Database collections not available');
       return [];
     }
     
@@ -54,7 +55,7 @@ const getActiveInboxes = async (): Promise<string[]> => {
     
     return Array.from(activeInboxIds);
   } catch (error) {
-    console.error('Error getting active inboxes:', error);
+    logger.error('Error getting active inboxes', { error });
     return [];
   }
 };
@@ -88,7 +89,7 @@ const updateCachedMetrics = async (inboxId: string): Promise<void> => {
       }
     }
   } catch (error) {
-    console.error(`Error updating cached metrics for ${inboxId}:`, error);
+    logger.error('Error updating cached metrics', { inboxId, error });
   }
 };
 
@@ -101,13 +102,13 @@ const getCachedMetrics = async (inboxId: string, timeWindow: string): Promise<an
   if (cached && cached[timeWindow]) {
     const cacheEntry = cached[timeWindow];
     if ((Date.now() - cacheEntry.timestamp) < CACHE_TTL) {
-      console.log(`Cache hit for ${cacheKey}`);
+      logger.debug('Metrics cache hit', { cacheKey });
       return cacheEntry.data;
     }
   }
-  
+
   // Cache miss - calculate and store
-  console.log(`Cache miss for ${cacheKey} - calculating metrics`);
+  logger.debug('Metrics cache miss, calculating', { cacheKey });
   const metrics = await monitoringService.calculateMetrics(inboxId, timeWindow);
   
   // Update cache
@@ -156,7 +157,7 @@ const cleanupCache = (): void => {
   });
   
   keysToDelete.forEach(key => metricsCache.delete(key));
-  console.log(`Cleaned up ${keysToDelete.length} old cache entries`);
+  logger.debug('Cleaned up old metrics cache entries', { count: keysToDelete.length });
 };
 
 // Get cache statistics
@@ -170,17 +171,17 @@ const getCacheStats = (): { size: number; hitRate: number } => {
 
 // Refresh cache for all active inboxes
 const refreshAllActiveInboxes = async (): Promise<void> => {
-  console.log('Starting metrics cache refresh for all active inboxes');
+  logger.debug('Starting metrics cache refresh for all active inboxes');
   const activeInboxes = await getActiveInboxes();
-  
-  const refreshPromises = activeInboxes.map(inboxId => 
+
+  const refreshPromises = activeInboxes.map(inboxId =>
     updateCachedMetrics(inboxId).catch(error => {
-      console.error(`Failed to refresh cache for ${inboxId}:`, error);
+      logger.error('Failed to refresh metrics cache for inbox', { inboxId, error });
     })
   );
-  
+
   await Promise.allSettled(refreshPromises);
-  console.log(`Refreshed metrics cache for ${activeInboxes.length} active inboxes`);
+  logger.debug('Metrics cache refresh complete', { count: activeInboxes.length });
 };
 
 // Clear cache for specific inbox (useful for testing)
@@ -193,7 +194,7 @@ const clearInboxCache = (inboxId: string): void => {
   });
   
   keysToDelete.forEach(key => metricsCache.delete(key));
-  console.log(`Cleared cache for inbox ${inboxId}`);
+  logger.debug('Cleared metrics cache for inbox', { inboxId });
 };
 
 export default {

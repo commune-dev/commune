@@ -17,8 +17,12 @@ export class MassEmailDetector {
   
   // Thresholds
   private readonly BURST_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
-  private readonly NORMAL_RATE_THRESHOLD = 50; // emails per 5 min
-  private readonly ATTACK_RATE_THRESHOLD = 100; // emails per 5 min
+  private readonly NORMAL_RATE_THRESHOLD = 50; // emails per 5 min (unknown senders)
+  private readonly ATTACK_RATE_THRESHOLD = 100; // emails per 5 min (unknown senders)
+  // Verified senders (domains set up through Commune) are legitimate AI agents / SDRs.
+  // Raise their threshold significantly — 10,000/5 min — so bulk sends don't trigger
+  // mass-attack detection. They still go through DNSBL and behavioral reputation checks.
+  private readonly VERIFIED_ATTACK_RATE_THRESHOLD = 10000; // emails per 5 min (verified)
   private readonly LOW_QUALITY_RATIO = 0.6; // 60% low quality = attack
   private readonly LOW_QUALITY_SPAM_SCORE = 0.4; // score > 0.4 = low quality
 
@@ -38,7 +42,8 @@ export class MassEmailDetector {
     orgId: string,
     senderEmail: string,
     spamScore: number,
-    domainReputation: number
+    domainReputation: number,
+    isVerifiedSender: boolean = false
   ): Promise<{
     isAttack: boolean;
     shouldReject: boolean;
@@ -86,8 +91,13 @@ export class MassEmailDetector {
     const lowQualityRatio = burst.lowQualityCount / burst.count;
     const emailsPerMinute = burst.count / ((now - burst.firstSeen) / 60000);
 
-    // Determine if this is an attack
-    const isHighVolume = burst.count > this.ATTACK_RATE_THRESHOLD;
+    // Determine if this is an attack.
+    // Verified senders use a much higher volume threshold — they are legitimate AI agents
+    // running bulk sends (SDRs, support agents) and should not be flagged for volume alone.
+    const attackThreshold = isVerifiedSender
+      ? this.VERIFIED_ATTACK_RATE_THRESHOLD
+      : this.ATTACK_RATE_THRESHOLD;
+    const isHighVolume = burst.count > attackThreshold;
     const isLowQualityBurst = lowQualityRatio > this.LOW_QUALITY_RATIO;
     const isAttack = isHighVolume && isLowQualityBurst;
 
@@ -101,8 +111,8 @@ export class MassEmailDetector {
         shouldReject = true;
         reason = 'Mass email attack detected - low quality email rejected';
       }
-    } else if (burst.count > this.NORMAL_RATE_THRESHOLD && isLowQualityBurst) {
-      // Approaching attack threshold with low quality
+    } else if (!isVerifiedSender && burst.count > this.NORMAL_RATE_THRESHOLD && isLowQualityBurst) {
+      // Approaching attack threshold with low quality (skip check for verified senders)
       if (spamScore > 0.6) {
         shouldReject = true;
         reason = 'High volume of low quality emails - rejecting suspicious email';

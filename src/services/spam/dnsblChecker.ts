@@ -13,7 +13,9 @@ export class DNSBLChecker {
     'bl.spamcop.net',
     'dnsbl.sorbs.net',
     'b.barracudacentral.org',
-    'dnsbl-1.uceprotect.net',
+    // UCEPROTECT removed: notorious false-positive generator that lists entire ESP IP ranges
+    // and charges for delisting. Causes false spam flags against legitimate senders.
+    // Keep: Spamhaus, SpamCop, SORBS, Barracuda (industry-standard, low false-positive rate)
   ];
 
   private constructor() {}

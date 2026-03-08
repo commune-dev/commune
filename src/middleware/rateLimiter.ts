@@ -1,8 +1,20 @@
 import rateLimit from 'express-rate-limit';
+import { RedisStore } from 'rate-limit-redis';
 import { Request, Response } from 'express';
 import { getOrgTierLimits, TierType } from '../config/rateLimits';
 import { resolveOrgTier } from '../lib/tierResolver';
+import { getRedisClient } from '../lib/redis';
 import logger from '../utils/logger';
+
+function createRedisStore(prefix: string) {
+  const client = getRedisClient();
+  if (!client) return undefined; // graceful fallback to in-memory when Redis down
+
+  return new RedisStore({
+    sendCommand: (...args: string[]) => (client as any).call(...args),
+    prefix: `rl:${prefix}:`,
+  });
+}
 
 // In-memory store for rate limiting
 // Maps: "orgId:endpoint:window" -> number of requests
@@ -80,6 +92,7 @@ export const emailLimiter = rateLimit({
       orgId,
     });
   },
+  store: createRedisStore('email-hour'),
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -102,6 +115,7 @@ export const emailDailyLimiter = rateLimit({
       retryAfter: req.rateLimit?.resetTime,
     });
   },
+  store: createRedisStore('email-day'),
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -120,6 +134,7 @@ export const domainLimiter = rateLimit({
       retryAfter: req.rateLimit?.resetTime,
     });
   },
+  store: createRedisStore('domain-day'),
   standardHeaders: true,
   legacyHeaders: false,
 });
@@ -138,6 +153,7 @@ export const inboxLimiter = rateLimit({
       retryAfter: req.rateLimit?.resetTime,
     });
   },
+  store: createRedisStore('inbox-day'),
   standardHeaders: true,
   legacyHeaders: false,
 });

@@ -1,0 +1,2212 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Commune API",
+    "version": "1.0.0",
+    "description": "The Commune API lets AI agents and developers send and receive email, manage inboxes and domains, and process structured data from email conversations. All endpoints require a Bearer API key.\n\nBase URL: `https://api.commune.email`\n\nAuthentication: Pass your API key as `Authorization: Bearer comm_...`",
+    "contact": {
+      "name": "Commune Support",
+      "url": "https://commune.email",
+      "email": "support@commune.email"
+    },
+    "license": {
+      "name": "Business Source License 1.1",
+      "url": "https://mariadb.com/bsl11/"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://api.commune.email",
+      "description": "Production"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "comm_...",
+        "description": "API key issued from the Commune dashboard. Prefix `comm_`."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable error message"
+          }
+        }
+      },
+      "Participant": {
+        "type": "object",
+        "required": ["role", "identity"],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": ["sender", "to", "cc", "bcc", "mentioned", "participant"],
+            "description": "Participant's role in the message"
+          },
+          "identity": {
+            "type": "string",
+            "description": "Email address of the participant"
+          }
+        }
+      },
+      "MessageMetadata": {
+        "type": "object",
+        "properties": {
+          "created_at": { "type": "string", "format": "date-time" },
+          "subject": { "type": "string" },
+          "in_reply_to": { "type": "string", "nullable": true },
+          "references": { "type": "array", "items": { "type": "string" } },
+          "inbox_id": { "type": "string", "nullable": true },
+          "inbox_address": { "type": "string", "nullable": true },
+          "domain_id": { "type": "string", "nullable": true },
+          "message_id": { "type": "string", "nullable": true },
+          "delivery_status": {
+            "type": "string",
+            "enum": ["sent", "delivered", "bounced", "failed", "complained", "suppressed", "blocked", "credit_limit"],
+            "nullable": true
+          },
+          "delivery_data": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "sent_at": { "type": "string", "format": "date-time" },
+              "delivered_at": { "type": "string", "format": "date-time" },
+              "bounced_at": { "type": "string", "format": "date-time" },
+              "failed_at": { "type": "string", "format": "date-time" },
+              "bounce_reason": { "type": "string" },
+              "bounce_type": { "type": "string", "enum": ["hard", "soft"] },
+              "failure_reason": { "type": "string" }
+            }
+          },
+          "has_attachments": { "type": "boolean" },
+          "attachment_count": { "type": "integer" },
+          "attachment_ids": { "type": "array", "items": { "type": "string" } },
+          "spam_checked": { "type": "boolean" },
+          "spam_score": { "type": "number", "minimum": 0, "maximum": 1 },
+          "spam_action": { "type": "string", "enum": ["reject", "flag", "accept"] },
+          "spam_flagged": { "type": "boolean" },
+          "prompt_injection_detected": { "type": "boolean" },
+          "prompt_injection_risk": {
+            "type": "string",
+            "enum": ["none", "low", "medium", "high", "critical"]
+          },
+          "extracted_data": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true,
+            "description": "Structured data extracted via inbox extraction schema (if configured)"
+          }
+        }
+      },
+      "Message": {
+        "type": "object",
+        "required": ["message_id", "thread_id", "channel", "direction", "participants", "content", "created_at", "metadata"],
+        "properties": {
+          "message_id": { "type": "string", "description": "Unique message identifier" },
+          "thread_id": { "type": "string", "description": "Thread this message belongs to" },
+          "channel": { "type": "string", "enum": ["email", "sms"], "description": "Communication channel" },
+          "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+          "participants": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Participant" }
+          },
+          "content": { "type": "string", "description": "Plain text content" },
+          "content_html": { "type": "string", "nullable": true, "description": "HTML content" },
+          "attachments": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Array of attachment IDs"
+          },
+          "created_at": { "type": "string", "format": "date-time" },
+          "metadata": { "$ref": "#/components/schemas/MessageMetadata" }
+        }
+      },
+      "Thread": {
+        "type": "object",
+        "required": ["thread_id", "subject", "last_message_at", "message_count"],
+        "properties": {
+          "thread_id": { "type": "string" },
+          "subject": { "type": "string" },
+          "snippet": { "type": "string", "description": "Preview of the latest message content" },
+          "last_message_at": { "type": "string", "format": "date-time" },
+          "first_message_at": { "type": "string", "format": "date-time" },
+          "message_count": { "type": "integer", "minimum": 1 },
+          "last_direction": { "type": "string", "enum": ["inbound", "outbound"] },
+          "has_attachments": { "type": "boolean" },
+          "inbox_id": { "type": "string" },
+          "domain_id": { "type": "string" }
+        }
+      },
+      "ThreadMetadata": {
+        "type": "object",
+        "properties": {
+          "thread_id": { "type": "string" },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "status": {
+            "type": "string",
+            "enum": ["open", "needs_reply", "waiting", "closed"],
+            "default": "open"
+          },
+          "assigned_to": { "type": "string", "nullable": true }
+        }
+      },
+      "InboxWebhook": {
+        "type": "object",
+        "properties": {
+          "endpoint": { "type": "string", "format": "uri", "description": "URL to receive webhook POSTs" },
+          "events": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Event types to subscribe to (default: all)"
+          },
+          "secret": { "type": "string", "description": "HMAC signing secret (write-only, not returned in reads)" }
+        }
+      },
+      "ExtractionSchema": {
+        "type": "object",
+        "required": ["name", "schema"],
+        "properties": {
+          "name": { "type": "string", "description": "Schema name for reference" },
+          "description": { "type": "string" },
+          "schema": {
+            "type": "object",
+            "description": "JSON Schema (type: object) describing the fields to extract",
+            "additionalProperties": true
+          },
+          "enabled": { "type": "boolean", "default": true }
+        }
+      },
+      "Inbox": {
+        "type": "object",
+        "required": ["id", "localPart"],
+        "properties": {
+          "id": { "type": "string", "description": "Unique inbox ID (UUID)" },
+          "localPart": { "type": "string", "description": "Local part of the inbox email address (e.g. `support` in `support@yourdomain.com`)" },
+          "address": { "type": "string", "description": "Full email address, e.g. `support@yourdomain.com`" },
+          "displayName": { "type": "string", "description": "Human-friendly display name" },
+          "status": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "webhook": { "$ref": "#/components/schemas/InboxWebhook" },
+          "extractionSchema": { "$ref": "#/components/schemas/ExtractionSchema" },
+          "domain_id": { "type": "string", "description": "ID of the domain this inbox belongs to" },
+          "domain_name": { "type": "string", "description": "Domain name" }
+        }
+      },
+      "Domain": {
+        "type": "object",
+        "required": ["id"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string", "description": "Domain name, e.g. `yourdomain.com`" },
+          "status": { "type": "string", "enum": ["pending", "verified", "failed"] },
+          "region": { "type": "string", "description": "AWS region for the domain" },
+          "records": {
+            "type": "array",
+            "description": "DNS records to configure for this domain",
+            "items": { "type": "object", "additionalProperties": true }
+          },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Attachment": {
+        "type": "object",
+        "required": ["attachment_id", "filename", "mime_type", "size"],
+        "properties": {
+          "attachment_id": { "type": "string" },
+          "message_id": { "type": "string" },
+          "filename": { "type": "string" },
+          "mime_type": { "type": "string" },
+          "size": { "type": "integer", "description": "File size in bytes" },
+          "storage_type": { "type": "string", "enum": ["database", "cloudinary"] },
+          "cloudinary_url": { "type": "string", "nullable": true }
+        }
+      },
+      "WebhookDelivery": {
+        "type": "object",
+        "properties": {
+          "delivery_id": { "type": "string" },
+          "inbox_id": { "type": "string" },
+          "message_id": { "type": "string" },
+          "endpoint": { "type": "string", "format": "uri" },
+          "status": { "type": "string", "enum": ["pending", "delivered", "retrying", "dead"] },
+          "attempt_count": { "type": "integer" },
+          "max_attempts": { "type": "integer" },
+          "last_status_code": { "type": "integer", "nullable": true },
+          "last_error": { "type": "string", "nullable": true },
+          "delivery_latency_ms": { "type": "integer", "nullable": true },
+          "next_retry_at": { "type": "string", "format": "date-time", "nullable": true },
+          "created_at": { "type": "string", "format": "date-time" },
+          "delivered_at": { "type": "string", "format": "date-time", "nullable": true },
+          "dead_at": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "SendEmailRequest": {
+        "type": "object",
+        "required": ["to", "subject"],
+        "properties": {
+          "to": {
+            "oneOf": [
+              { "type": "string", "format": "email" },
+              { "type": "array", "items": { "type": "string", "format": "email" }, "minItems": 1 }
+            ],
+            "description": "Recipient(s)"
+          },
+          "subject": { "type": "string", "maxLength": 500 },
+          "html": { "type": "string", "description": "HTML body. At least one of html or text is required." },
+          "text": { "type": "string", "description": "Plain text body. At least one of html or text is required." },
+          "from": { "type": "string", "format": "email", "description": "Sender address (overrides inbox default)" },
+          "cc": {
+            "oneOf": [
+              { "type": "string", "format": "email" },
+              { "type": "array", "items": { "type": "string", "format": "email" } }
+            ]
+          },
+          "bcc": {
+            "oneOf": [
+              { "type": "string", "format": "email" },
+              { "type": "array", "items": { "type": "string", "format": "email" } }
+            ]
+          },
+          "reply_to": { "type": "string", "format": "email" },
+          "thread_id": { "type": "string", "description": "Thread to reply into" },
+          "inbox_id": { "type": "string", "description": "Inbox to send from (recommended)" },
+          "domain_id": { "type": "string", "description": "Domain to send from (inferred from inbox_id if provided)" },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                { "type": "string", "description": "Attachment ID from POST /v1/attachments/upload" },
+                {
+                  "type": "object",
+                  "required": ["filename", "content"],
+                  "properties": {
+                    "filename": { "type": "string" },
+                    "content": { "type": "string", "description": "Base64-encoded content" },
+                    "content_type": { "type": "string" }
+                  }
+                }
+              ]
+            }
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": { "type": "string" },
+            "description": "Custom email headers"
+          }
+        }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing or invalid API key",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": "Unauthorized" }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Insufficient permissions",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Resource not found",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Invalid request body or parameters",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "TooManyRequests": {
+        "description": "Rate limit exceeded",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" },
+            "example": { "error": "Rate limit exceeded" }
+          }
+        }
+      },
+      "InternalError": {
+        "description": "Internal server error",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/v1/messages/send": {
+      "post": {
+        "tags": ["Messages"],
+        "operationId": "sendEmail",
+        "summary": "Send an email",
+        "description": "Send an outbound email message. Supports threading, CC/BCC, HTML/text bodies, and file attachments. Emails are queued via BullMQ and delivered through your domain's SMTP configuration.\n\nRequires `messages:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": false,
+            "description": "Unique key for idempotent request deduplication. If a request with the same key was already processed within 24 hours, the cached response is returned with header Idempotency-Replayed: true.",
+            "schema": { "type": "string", "example": "550e8400-e29b-41d4-a716-446655440000" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/SendEmailRequest" },
+              "example": {
+                "to": "alice@example.com",
+                "subject": "Hello from Commune",
+                "html": "<p>Hello!</p>",
+                "inbox_id": "550e8400-e29b-41d4-a716-446655440000"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Email accepted and queued for delivery",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "description": "Pre-generated message ID (msg_...)", "example": "msg_abc123def456" },
+                        "status": { "type": "string", "enum": ["queued"], "description": "Delivery status" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/messages": {
+      "get": {
+        "tags": ["Messages"],
+        "operationId": "listMessages",
+        "summary": "List messages",
+        "description": "List messages filtered by inbox, domain, or sender. At least one filter is required.\n\nRequires `messages:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "inbox_id",
+            "in": "query",
+            "description": "Filter by inbox ID",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "domain_id",
+            "in": "query",
+            "description": "Filter by domain ID",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "sender",
+            "in": "query",
+            "description": "Filter by sender email address",
+            "schema": { "type": "string", "format": "email" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of results (1–1000, default 50)",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort order",
+            "schema": { "type": "string", "enum": ["asc", "desc"], "default": "desc" }
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "description": "Return messages before this ISO date",
+            "schema": { "type": "string", "format": "date-time" }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "description": "Return messages after this ISO date",
+            "schema": { "type": "string", "format": "date-time" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Message" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/threads": {
+      "get": {
+        "tags": ["Threads"],
+        "operationId": "listThreads",
+        "summary": "List threads",
+        "description": "List email threads with cursor-based pagination. Either `inbox_id` or `domain_id` is required.\n\nRequires `threads:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "inbox_id",
+            "in": "query",
+            "description": "Filter by inbox ID (recommended)",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "domain_id",
+            "in": "query",
+            "description": "Filter by domain ID",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max results per page (1–100, default 20)",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor from a previous response's `next_cursor`",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort order (newest first by default)",
+            "schema": { "type": "string", "enum": ["asc", "desc"], "default": "desc" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of threads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Thread" }
+                    },
+                    "next_cursor": { "type": "string", "nullable": true },
+                    "has_more": { "type": "boolean" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/threads/{threadId}/messages": {
+      "get": {
+        "tags": ["Threads"],
+        "operationId": "getThreadMessages",
+        "summary": "Get messages in a thread",
+        "description": "Returns all messages in a thread in chronological order.\n\nRequires `threads:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max messages to return (1–1000, default 50)",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 50 }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "description": "Sort order (oldest first by default)",
+            "schema": { "type": "string", "enum": ["asc", "desc"], "default": "asc" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Messages in the thread",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Message" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/threads/{threadId}/metadata": {
+      "get": {
+        "tags": ["Threads"],
+        "operationId": "getThreadMetadata",
+        "summary": "Get thread triage metadata",
+        "description": "Returns tags, status, and assignment for a thread.\n\nRequires `threads:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Thread metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/ThreadMetadata" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/threads/{threadId}/status": {
+      "put": {
+        "tags": ["Threads"],
+        "operationId": "setThreadStatus",
+        "summary": "Set thread status",
+        "description": "Set the triage status of a thread.\n\nRequires `threads:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["status"],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": ["open", "needs_reply", "waiting", "closed"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated thread metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/ThreadMetadata" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/threads/{threadId}/tags": {
+      "post": {
+        "tags": ["Threads"],
+        "operationId": "addThreadTags",
+        "summary": "Add tags to a thread",
+        "description": "Add one or more tags to a thread for categorization.\n\nRequires `threads:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["tags"],
+                "properties": {
+                  "tags": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated thread metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/ThreadMetadata" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "delete": {
+        "tags": ["Threads"],
+        "operationId": "removeThreadTags",
+        "summary": "Remove tags from a thread",
+        "description": "Remove one or more tags from a thread.\n\nRequires `threads:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["tags"],
+                "properties": {
+                  "tags": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated thread metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/ThreadMetadata" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/threads/{threadId}/assign": {
+      "put": {
+        "tags": ["Threads"],
+        "operationId": "assignThread",
+        "summary": "Assign a thread",
+        "description": "Assign a thread to an agent or user. Pass `null` to unassign.\n\nRequires `threads:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "threadId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["assigned_to"],
+                "properties": {
+                  "assigned_to": {
+                    "oneOf": [
+                      { "type": "string" },
+                      { "type": "null" }
+                    ],
+                    "description": "Agent/user identifier, or null to unassign"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated thread metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/ThreadMetadata" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/inboxes": {
+      "get": {
+        "tags": ["Inboxes"],
+        "operationId": "listInboxes",
+        "summary": "List all inboxes",
+        "description": "Returns all inboxes across all domains for your organization.\n\nRequires `inboxes:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of inboxes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Inbox" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "post": {
+        "tags": ["Inboxes"],
+        "operationId": "createInbox",
+        "summary": "Create an inbox",
+        "description": "Create a new inbox. Domain is auto-resolved if not provided — your first custom domain is used, or the shared `commune.email` domain on free plans.\n\nRequires `inboxes:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["local_part"],
+                "properties": {
+                  "local_part": {
+                    "type": "string",
+                    "description": "Local part of the email address (e.g. `support` for `support@yourdomain.com`)"
+                  },
+                  "domain_id": {
+                    "type": "string",
+                    "description": "Domain to create the inbox on. Auto-resolved if omitted."
+                  },
+                  "display_name": { "type": "string", "description": "Human-friendly display name" },
+                  "webhook": { "$ref": "#/components/schemas/InboxWebhook" },
+                  "status": { "type": "string" }
+                }
+              },
+              "example": {
+                "local_part": "support",
+                "webhook": {
+                  "endpoint": "https://yourapp.com/webhooks/email"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Inbox created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Inbox" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/domains": {
+      "get": {
+        "tags": ["Domains"],
+        "operationId": "listDomains",
+        "summary": "List domains",
+        "description": "Returns all custom domains registered for your organization.\n\nRequires `domains:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "List of domains",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Domain" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "post": {
+        "tags": ["Domains"],
+        "operationId": "createDomain",
+        "summary": "Create a custom domain",
+        "description": "Register a new custom domain. DNS verification is required before the domain can receive email.\n\nRequires `domains:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string", "description": "Domain name, e.g. `yourdomain.com`" },
+                  "region": {
+                    "type": "string",
+                    "enum": ["us-east-1", "eu-west-1"],
+                    "description": "AWS region for the domain's sending infrastructure"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Domain created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Domain" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/domains/{domainId}": {
+      "get": {
+        "tags": ["Domains"],
+        "operationId": "getDomain",
+        "summary": "Get a domain",
+        "description": "Returns details for a specific domain.\n\nRequires `domains:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "domainId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Domain details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Domain" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/domains/{domainId}/verify": {
+      "post": {
+        "tags": ["Domains"],
+        "operationId": "verifyDomain",
+        "summary": "Trigger DNS verification",
+        "description": "Trigger DNS verification for a domain. Configure the required DNS records from `GET /v1/domains/{domainId}/records` before calling this endpoint.\n\nRequires `domains:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "domainId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "type": "object", "additionalProperties": true }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/domains/{domainId}/records": {
+      "get": {
+        "tags": ["Domains"],
+        "operationId": "getDomainRecords",
+        "summary": "Get DNS records",
+        "description": "Returns the DNS records that must be configured at your DNS provider to verify this domain.\n\nRequires `domains:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "domainId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "DNS records",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "type": { "type": "string" },
+                          "name": { "type": "string" },
+                          "value": { "type": "string" },
+                          "ttl": { "type": "integer" },
+                          "priority": { "type": "integer" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/domains/{domainId}/inboxes": {
+      "get": {
+        "tags": ["Inboxes"],
+        "operationId": "listDomainInboxes",
+        "summary": "List inboxes for a domain",
+        "description": "Returns all inboxes belonging to a specific domain.\n\nRequires `inboxes:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "domainId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of inboxes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Inbox" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "post": {
+        "tags": ["Inboxes"],
+        "operationId": "createDomainInbox",
+        "summary": "Create an inbox on a domain",
+        "description": "Create a new inbox on a specific domain.\n\nRequires `inboxes:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "domainId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["local_part"],
+                "properties": {
+                  "local_part": { "type": "string" },
+                  "display_name": { "type": "string" },
+                  "webhook": { "$ref": "#/components/schemas/InboxWebhook" },
+                  "status": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Inbox created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Inbox" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/TooManyRequests" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/domains/{domainId}/inboxes/{inboxId}": {
+      "get": {
+        "tags": ["Inboxes"],
+        "operationId": "getInbox",
+        "summary": "Get an inbox",
+        "description": "Returns a single inbox by domain and inbox ID.\n\nRequires `inboxes:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "domainId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "inboxId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inbox",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Inbox" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "put": {
+        "tags": ["Inboxes"],
+        "operationId": "updateInbox",
+        "summary": "Update an inbox",
+        "description": "Update an inbox's local part, webhook configuration, or status.\n\nRequires `inboxes:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "domainId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "inboxId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "local_part": { "type": "string" },
+                  "webhook": { "$ref": "#/components/schemas/InboxWebhook" },
+                  "status": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated inbox",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Inbox" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "delete": {
+        "tags": ["Inboxes"],
+        "operationId": "deleteInbox",
+        "summary": "Delete an inbox",
+        "description": "Permanently delete an inbox. This does not delete stored messages.\n\nRequires `inboxes:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "domainId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "inboxId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Inbox deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "ok": { "type": "boolean", "example": true }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/domains/{domainId}/inboxes/{inboxId}/extraction-schema": {
+      "put": {
+        "tags": ["Inboxes"],
+        "operationId": "setExtractionSchema",
+        "summary": "Configure structured extraction",
+        "description": "Set a JSON Schema to automatically extract structured data from incoming emails. Extracted data is included in the `message.received` webhook payload and in the message metadata.\n\nRequires `inboxes:write` permission and a Business/Enterprise plan.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "domainId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "inboxId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ExtractionSchema" },
+              "example": {
+                "name": "support_ticket",
+                "description": "Extract support ticket fields from customer emails",
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "issue_type": { "type": "string" },
+                    "urgency": { "type": "string", "enum": ["low", "medium", "high"] },
+                    "account_id": { "type": "string" }
+                  }
+                },
+                "enabled": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated inbox with extraction schema",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Inbox" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      },
+      "delete": {
+        "tags": ["Inboxes"],
+        "operationId": "deleteExtractionSchema",
+        "summary": "Remove extraction schema",
+        "description": "Remove structured data extraction configuration from an inbox.\n\nRequires `inboxes:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "domainId", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "inboxId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Extraction schema removed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Inbox" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/attachments/upload": {
+      "post": {
+        "tags": ["Attachments"],
+        "operationId": "uploadAttachment",
+        "summary": "Upload an attachment",
+        "description": "Upload a file to use as an attachment when sending emails. Returns an `attachment_id` to pass in the `attachments` array of `POST /v1/messages/send`.\n\nMaximum file size is limited by your plan's storage quota.\n\nRequires `attachments:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["content", "filename", "mime_type"],
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "Base64-encoded file content"
+                  },
+                  "filename": {
+                    "type": "string",
+                    "description": "Original filename, e.g. `invoice.pdf`"
+                  },
+                  "mime_type": {
+                    "type": "string",
+                    "description": "MIME type, e.g. `application/pdf`"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Attachment uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "attachment_id": { "type": "string" },
+                        "filename": { "type": "string" },
+                        "mime_type": { "type": "string" },
+                        "size": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "413": {
+            "description": "Attachment storage quota exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string" },
+                    "used_mb": { "type": "number" },
+                    "limit_mb": { "type": "number" },
+                    "upgrade_url": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/attachments/{attachmentId}": {
+      "get": {
+        "tags": ["Attachments"],
+        "operationId": "getAttachment",
+        "summary": "Get attachment metadata",
+        "description": "Returns metadata for an attachment without its content. Use `GET /v1/attachments/{attachmentId}/url` to get a download link.\n\nRequires `attachments:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "attachmentId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Attachment metadata",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": { "$ref": "#/components/schemas/Attachment" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/attachments/{attachmentId}/url": {
+      "get": {
+        "tags": ["Attachments"],
+        "operationId": "getAttachmentUrl",
+        "summary": "Get attachment download URL",
+        "description": "Returns a temporary signed URL to download the attachment. For Cloudinary-stored files the URL expires after `expires_in` seconds. For database-stored files, a `data:` URL is returned.\n\nRequires `attachments:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "attachmentId", "in": "path", "required": true, "schema": { "type": "string" } },
+          {
+            "name": "expires_in",
+            "in": "query",
+            "description": "URL expiration in seconds (default 3600)",
+            "schema": { "type": "integer", "default": 3600 }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Download URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "url": { "type": "string" },
+                        "expires_in": { "type": "integer" },
+                        "filename": { "type": "string" },
+                        "mime_type": { "type": "string" },
+                        "size": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/webhooks/deliveries": {
+      "get": {
+        "tags": ["Webhooks"],
+        "operationId": "listWebhookDeliveries",
+        "summary": "List webhook deliveries",
+        "description": "Returns webhook delivery attempts with optional filters. Useful for debugging failed deliveries and reviewing delivery history.\n\nRequires `messages:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "inbox_id", "in": "query", "schema": { "type": "string" }, "description": "Filter by inbox" },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["pending", "delivered", "retrying", "dead"] },
+            "description": "Filter by delivery status"
+          },
+          { "name": "endpoint", "in": "query", "schema": { "type": "string" }, "description": "Filter by webhook endpoint URL" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50, "maximum": 100 } },
+          { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of webhook deliveries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deliveries": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/WebhookDelivery" }
+                    },
+                    "total": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/webhooks/deliveries/{deliveryId}": {
+      "get": {
+        "tags": ["Webhooks"],
+        "operationId": "getWebhookDelivery",
+        "summary": "Get webhook delivery detail",
+        "description": "Returns full detail for a single delivery including all attempt history.\n\nRequires `messages:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "deliveryId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "delivery": {
+                      "allOf": [
+                        { "$ref": "#/components/schemas/WebhookDelivery" },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "attempts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "attempt": { "type": "integer" },
+                                  "status_code": { "type": "integer", "nullable": true },
+                                  "error": { "type": "string", "nullable": true },
+                                  "latency_ms": { "type": "integer" },
+                                  "attempted_at": { "type": "string", "format": "date-time" }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/webhooks/deliveries/{deliveryId}/retry": {
+      "post": {
+        "tags": ["Webhooks"],
+        "operationId": "retryWebhookDelivery",
+        "summary": "Retry a dead delivery",
+        "description": "Manually re-queue a failed or dead webhook delivery for immediate retry.\n\nRequires `messages:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "deliveryId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery re-queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean", "example": true },
+                    "message": { "type": "string", "example": "Delivery queued for retry" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/webhooks/health": {
+      "get": {
+        "tags": ["Webhooks"],
+        "operationId": "getWebhookHealth",
+        "summary": "Get webhook endpoint health",
+        "description": "Returns per-endpoint delivery health statistics for the last 24 hours, including success rates and average latency.\n\nRequires `messages:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Webhook health stats",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "endpoints": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "endpoint": { "type": "string", "format": "uri" },
+                          "total": { "type": "integer" },
+                          "delivered": { "type": "integer" },
+                          "failed": { "type": "integer" },
+                          "dead": { "type": "integer" },
+                          "success_rate": { "type": "number", "minimum": 0, "maximum": 1 },
+                          "avg_latency_ms": { "type": "number" }
+                        }
+                      }
+                    },
+                    "totals": {
+                      "type": "object",
+                      "properties": {
+                        "pending": { "type": "integer" },
+                        "delivered": { "type": "integer" },
+                        "retrying": { "type": "integer" },
+                        "dead": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/webhooks/test": {
+      "post": {
+        "tags": ["Webhooks"],
+        "operationId": "testWebhook",
+        "summary": "Send a test webhook event",
+        "description": "Fire a synthetic `message.received` event to an inbox's webhook endpoint. Use this to verify your webhook handler is working without sending a real email.\n\nThe request is POSTed directly to your endpoint with the same headers as real events (`x-commune-signature`, `x-commune-timestamp`, `x-commune-delivery-id`) plus `x-commune-test: true`.\n\nRequires `messages:write` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["inbox_id"],
+                "properties": {
+                  "inbox_id": {
+                    "type": "string",
+                    "description": "ID of the inbox to test. The inbox must have a webhook endpoint configured."
+                  },
+                  "event_type": {
+                    "type": "string",
+                    "enum": ["message.received"],
+                    "default": "message.received",
+                    "description": "Event type to simulate"
+                  }
+                }
+              },
+              "example": {
+                "inbox_id": "550e8400-e29b-41d4-a716-446655440000"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Test delivery result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "delivered": { "type": "boolean", "description": "Whether the endpoint returned 2xx" },
+                        "status_code": { "type": "integer", "nullable": true, "description": "HTTP status returned by your endpoint" },
+                        "response_time_ms": { "type": "integer", "description": "Round-trip time in milliseconds" },
+                        "endpoint": { "type": "string", "format": "uri", "description": "The endpoint that was tested" },
+                        "event_type": { "type": "string", "example": "message.received" },
+                        "test": { "type": "boolean", "example": true },
+                        "error": { "type": "string", "description": "Error message if delivery failed" }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "data": {
+                    "delivered": true,
+                    "status_code": 200,
+                    "response_time_ms": 45,
+                    "endpoint": "https://yourapp.com/webhooks/email",
+                    "event_type": "message.received",
+                    "test": true
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/delivery/metrics": {
+      "get": {
+        "tags": ["Delivery"],
+        "operationId": "getDeliveryMetrics",
+        "summary": "Get delivery metrics",
+        "description": "Returns outbound email delivery statistics (sent, delivered, bounced, complained, failed, suppressed) for an inbox or domain over a time window.\n\nRequires `messages:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "inbox_id", "in": "query", "schema": { "type": "string" }, "description": "Filter by inbox ID" },
+          { "name": "domain_id", "in": "query", "schema": { "type": "string" }, "description": "Filter by domain ID" },
+          {
+            "name": "period",
+            "in": "query",
+            "schema": { "type": "string", "example": "7d" },
+            "description": "Time period, e.g. `7d`, `30d`, `24h` (default `7d`, max `90d`)"
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 1, "maximum": 90, "default": 7 },
+            "description": "Number of days (alternative to `period`)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery metrics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "inbox_id": { "type": "string" },
+                        "domain_id": { "type": "string" },
+                        "period": {
+                          "type": "object",
+                          "properties": {
+                            "start": { "type": "string", "format": "date-time" },
+                            "end": { "type": "string", "format": "date-time" },
+                            "days": { "type": "integer" }
+                          }
+                        },
+                        "sent": { "type": "integer" },
+                        "delivered": { "type": "integer" },
+                        "bounced": { "type": "integer" },
+                        "complained": { "type": "integer" },
+                        "failed": { "type": "integer" },
+                        "suppressed": { "type": "integer" },
+                        "orphan_events": { "type": "integer" },
+                        "delivery_rate": { "type": "string", "example": "97.5%" },
+                        "bounce_rate": { "type": "string", "example": "0.5%" },
+                        "complaint_rate": { "type": "string", "example": "0.0%" },
+                        "failure_rate": { "type": "string" },
+                        "suppression_rate": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/delivery/events": {
+      "get": {
+        "tags": ["Delivery"],
+        "operationId": "listDeliveryEvents",
+        "summary": "List delivery events",
+        "description": "List recent delivery events (bounces, complaints, etc.) for an inbox, domain, or specific message.\n\nRequires `messages:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "inbox_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "domain_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "message_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "event_type", "in": "query", "schema": { "type": "string" }, "description": "Filter by event type (e.g. `bounced`, `complained`)" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50, "maximum": 200 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Delivery events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "event_type": { "type": "string" },
+                          "message_id": { "type": "string" },
+                          "inbox_id": { "type": "string" },
+                          "domain_id": { "type": "string" },
+                          "created_at": { "type": "string", "format": "date-time" },
+                          "data": { "type": "object", "additionalProperties": true }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/delivery/suppressions": {
+      "get": {
+        "tags": ["Delivery"],
+        "operationId": "listSuppressions",
+        "summary": "List suppressed addresses",
+        "description": "Returns email addresses that have been suppressed (bounced or complained) for an inbox or domain. Emails to suppressed addresses are blocked automatically.\n\nRequires `messages:read` permission.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          { "name": "inbox_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "domain_id", "in": "query", "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 50, "maximum": 200 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Suppressed addresses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "email": { "type": "string", "format": "email" },
+                          "reason": { "type": "string" },
+                          "created_at": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/search/threads": {
+      "get": {
+        "tags": ["Search"],
+        "operationId": "searchThreads",
+        "summary": "Search threads",
+        "description": "Search email threads by natural language query. Uses semantic vector search (Qdrant + embeddings) when available, falls back to regex-based subject/content search.\n\nRequires `threads:read` permission and a Business/Enterprise plan.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Natural language search query"
+          },
+          { "name": "inbox_id", "in": "query", "schema": { "type": "string" }, "description": "Filter by inbox (recommended)" },
+          { "name": "domain_id", "in": "query", "schema": { "type": "string" }, "description": "Filter by domain" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Search results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "thread_id": { "type": "string" },
+                          "subject": { "type": "string" },
+                          "score": { "type": "number", "description": "Relevance score (vector search only)" },
+                          "inbox_id": { "type": "string" },
+                          "domain_id": { "type": "string" },
+                          "participants": { "type": "array", "items": { "type": "string" } },
+                          "direction": { "type": "string", "enum": ["inbound", "outbound"] },
+                          "channel": { "type": "string" }
+                        }
+                      }
+                    },
+                    "search_type": {
+                      "type": "string",
+                      "enum": ["vector", "regex"],
+                      "description": "Whether vector or regex search was used"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/credits": {
+      "get": {
+        "tags": ["Credits"],
+        "operationId": "getCredits",
+        "summary": "Get credit balance",
+        "description": "Returns the current SMS/voice credit balance for your organization.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Credit balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "balance": { "type": "number", "description": "Available credits" },
+                        "lifetime_credits": { "type": "number" },
+                        "lifetime_used": { "type": "number" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/credits/bundles": {
+      "get": {
+        "tags": ["Credits"],
+        "operationId": "listCreditBundles",
+        "summary": "List credit bundles",
+        "description": "Returns available credit purchase bundles with pricing.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Credit bundles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string", "enum": ["starter", "growth", "scale"] },
+                          "credits": { "type": "number" },
+                          "price": { "type": "number", "description": "Price in USD" },
+                          "price_per_credit": { "type": "string" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/v1/credits/checkout": {
+      "post": {
+        "tags": ["Credits"],
+        "operationId": "createCreditsCheckout",
+        "summary": "Create credit purchase checkout",
+        "description": "Create a Stripe Checkout session to purchase a credit bundle. Returns a `checkout_url` to redirect the user to.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["bundle"],
+                "properties": {
+                  "bundle": {
+                    "type": "string",
+                    "enum": ["starter", "growth", "scale"]
+                  },
+                  "success_url": { "type": "string", "format": "uri", "description": "Redirect URL after successful payment" },
+                  "cancel_url": { "type": "string", "format": "uri", "description": "Redirect URL if checkout is cancelled" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Checkout session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "checkout_url": { "type": "string", "format": "uri" },
+                        "bundle": { "type": "string" },
+                        "credits": { "type": "number" },
+                        "price": { "type": "number" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": ["Meta"],
+        "operationId": "getOpenApiSpec",
+        "summary": "Get OpenAPI specification",
+        "description": "Returns this OpenAPI 3.0.3 specification document. No authentication required.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OpenAPI specification",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Messages",
+      "description": "Send and retrieve email messages"
+    },
+    {
+      "name": "Threads",
+      "description": "Browse and triage email threads"
+    },
+    {
+      "name": "Inboxes",
+      "description": "Manage inboxes and configure webhooks and data extraction"
+    },
+    {
+      "name": "Domains",
+      "description": "Register and verify custom sending/receiving domains"
+    },
+    {
+      "name": "Attachments",
+      "description": "Upload attachments for outbound email and retrieve attachment content"
+    },
+    {
+      "name": "Webhooks",
+      "description": "Monitor and debug webhook delivery. Commune guarantees at-least-once delivery with exponential backoff retries."
+    },
+    {
+      "name": "Delivery",
+      "description": "Outbound email delivery metrics, events, and suppression lists"
+    },
+    {
+      "name": "Search",
+      "description": "Semantic search across email threads (Business/Enterprise)"
+    },
+    {
+      "name": "Credits",
+      "description": "SMS/voice credit balance and purchase"
+    },
+    {
+      "name": "Meta",
+      "description": "API metadata"
+    }
+  ]
+}

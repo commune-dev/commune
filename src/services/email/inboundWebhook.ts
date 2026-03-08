@@ -1,4 +1,5 @@
 import resendHttp from '../resendHttp';
+import resend from '../resendClient';
 import { verifyWebhook } from '../../lib/verifySvix';
 import messageStore from '../../stores/messageStore';
 import { normalizeEmail, collectSmtpCandidates } from './normalize';
@@ -17,6 +18,7 @@ import { hasFeature } from '../../config/rateLimits';
 import { registerThreadToken } from '../../lib/threadToken';
 import webhookDeliveryService from '../webhookDeliveryService';
 import realtimeService from '../realtimeService';
+import { scheduleGraphExtraction } from '../graphExtractionService';
 import {
   normalizeRecipient,
   inferDomainFromPayload,
@@ -37,9 +39,18 @@ const handleInboundWebhook = async ({
 }) => {
   // Idempotency check: skip if we've already processed this webhook event
   if (headers.id) {
-    const isDuplicate = await isWebhookDuplicate(headers.id);
+    let dedupKey = headers.id; // fallback for non-email events
+    try {
+      const parsedPayload = JSON.parse(payload);
+      if (parsedPayload?.type === 'email.received' && parsedPayload?.data?.email_id) {
+        dedupKey = `email:${parsedPayload.data.email_id}`;
+      }
+    } catch {
+      // malformed payload — keep svix-id as key; signature check will reject it
+    }
+    const isDuplicate = await isWebhookDuplicate(dedupKey);
     if (isDuplicate) {
-      logger.debug('Duplicate webhook skipped', { svixId: headers.id });
+      logger.debug('Duplicate webhook skipped', { dedupKey });
       return { data: { duplicate: true, svix_id: headers.id } };
     }
   }
@@ -64,11 +75,20 @@ const handleInboundWebhook = async ({
   }
 
   if (event.type === 'email.received') {
-    const { data: email, error: emailError } = await resendHttp.getReceivedEmail(
-      event.data.email_id
-    );
+    const [emailResult, attachmentsResult] = await Promise.all([
+      resendHttp.getReceivedEmail(event.data.email_id),
+      resendHttp.listReceivedAttachments(event.data.email_id),
+    ]);
+
+    const { data: email, error: emailError } = emailResult;
     if (emailError) {
       return { error: emailError };
+    }
+
+    const { data: attachmentList, error: attachmentError } = attachmentsResult;
+    if (attachmentError) {
+      logger.error('Failed to fetch attachments from Resend', { error: attachmentError });
+      return { error: attachmentError };
     }
 
     // Resolve recipient, domain, and inbox first
@@ -81,13 +101,11 @@ const handleInboundWebhook = async ({
     const recipientDomain = primary?.domain || null;
 
 
-    // PRIORITY 1: Find domain by recipient email domain
-    const domainEntryByName = recipientDomain
-      ? await domainStore.getDomainByName(recipientDomain)
-      : null;
-    const domainEntryById = inferredDomainId
-      ? await domainStore.getDomain(inferredDomainId)
-      : null;
+    // PRIORITY 1: Find domain by recipient email domain (parallelized)
+    const [domainEntryByName, domainEntryById] = await Promise.all([
+      recipientDomain ? domainStore.getDomainByName(recipientDomain) : Promise.resolve(null),
+      inferredDomainId ? domainStore.getDomain(inferredDomainId) : Promise.resolve(null),
+    ]);
     const resolvedDomain = domainEntryByName || domainEntryById || inferredDomainEntry || null;
     const resolvedDomainId =
       resolvedDomain?.id || inferredDomainId || domainId || null;
@@ -107,14 +125,6 @@ const handleInboundWebhook = async ({
       localPart && resolvedDomainId
         ? await domainStore.getInboxByLocalPart(resolvedDomainId, localPart)
         : null;
-
-    // Now process attachments with inbox context
-    const { data: attachmentList, error: attachmentError } =
-      await resendHttp.listReceivedAttachments(event.data.email_id);
-    if (attachmentError) {
-      logger.error('Failed to fetch attachments from Resend', { error: attachmentError });
-      return { error: attachmentError };
-    }
 
 
     const attachments: AttachmentRecord[] = [];
@@ -241,42 +251,44 @@ const handleInboundWebhook = async ({
         reasons: spamAnalysis.reasons,
       });
 
-      // Store blocked spam email for tracking
+      // Store blocked spam email for tracking (fire-and-forget — return immediately to prevent retries)
       const senderDomain = fromEmail.split('@')[1] || '';
       const contentPreview = (emailContent || emailHtml || '').substring(0, 200);
       const urlCount = ((emailContent || emailHtml || '').match(/(https?:\/\/[^\s]+)/gi) || []).length;
-      
-      await blockedSpamStore.storeBlockedEmail({
-        org_id: inbox?.orgId || 'unknown',
-        inbox_id: inbox?.id,
-        sender_email: fromEmail,
-        sender_domain: senderDomain,
-        subject: emailSubject,
-        blocked_at: new Date(),
-        spam_score: spamAnalysis.spam_score,
-        reasons: spamAnalysis.reasons,
-        classification: spamAnalysis.reasons.some(r => r.includes('Mass email attack')) 
-          ? 'mass_attack'
-          : spamAnalysis.reasons.some(r => r.toLowerCase().includes('phishing'))
-          ? 'phishing'
-          : 'spam',
-        metadata: {
-          to: parsedRecipients.map(r => r.normalized),
-          content_preview: contentPreview,
-          url_count: urlCount,
-          has_attachments: attachments.length > 0,
-          sender_reputation: spamAnalysis.details.sender_reputation,
-          domain_reputation: spamAnalysis.details.domain_reputation,
-        },
-      });
 
-      // Update sender reputation
-      await reputationStore.updateSpamScore(fromEmail, {
-        spam_reports: (await reputationStore.getSpamScore(fromEmail))?.spam_reports || 0 + 1,
-        last_email_at: new Date(),
+      setImmediate(async () => {
+        try {
+          await blockedSpamStore.storeBlockedEmail({
+            org_id: inbox?.orgId || 'unknown',
+            inbox_id: inbox?.id,
+            sender_email: fromEmail,
+            sender_domain: senderDomain,
+            subject: emailSubject,
+            blocked_at: new Date(),
+            spam_score: spamAnalysis.spam_score,
+            reasons: spamAnalysis.reasons,
+            classification: spamAnalysis.reasons.some(r => r.includes('Mass email attack'))
+              ? 'mass_attack'
+              : spamAnalysis.reasons.some(r => r.toLowerCase().includes('phishing'))
+              ? 'phishing'
+              : 'spam',
+            metadata: {
+              to: parsedRecipients.map(r => r.normalized),
+              content_preview: contentPreview,
+              url_count: urlCount,
+              has_attachments: attachments.length > 0,
+              sender_reputation: spamAnalysis.details.sender_reputation,
+              domain_reputation: spamAnalysis.details.domain_reputation,
+            },
+          });
+          await reputationStore.updateSpamScore(fromEmail, {
+            spam_reports: (await reputationStore.getSpamScore(fromEmail))?.spam_reports || 0 + 1,
+            last_email_at: new Date(),
+          });
+        } catch (err) {
+          logger.error('Rejection logging failed', { error: err });
+        }
       });
-
-      // Return success to prevent retries
       return { data: { rejected: true, reason: 'spam' } };
     }
 
@@ -374,13 +386,12 @@ const handleInboundWebhook = async ({
       });
     }
 
-    // Store the unified message
-    await messageStore.insertMessage(message);
-
     // Only index and forward if not flagged as spam
     if (spamAnalysis.action === 'accept') {
-      // Index for vector search
-      await EmailProcessor.getInstance().processMessage(message);
+      // Index for vector search (fire-and-forget — don't block the response path)
+      EmailProcessor.getInstance().processMessage(message).catch(err =>
+        logger.error('Vector indexing failed', { messageId: message.message_id, error: err })
+      );
     }
 
     // Update sender reputation (positive signal)
@@ -458,12 +469,40 @@ const handleInboundWebhook = async ({
       }
     }
 
+    const finalOrgId = inbox?.orgId || resolvedDomain?.orgId;
     await messageStore.insertMessage({
       ...message,
-      orgId: inbox?.orgId || resolvedDomain?.orgId,
+      orgId: finalOrgId,
     });
     await messageStore.insertAttachments(attachments);
     logger.info('Inbound email stored', { messageId: message.message_id, threadId: message.thread_id });
+
+    // Personal inbox forwarding: shanjai@commune.email → shanjairajdev@gmail.com
+    if (localPart === 'shanjai' && resolvedDomainName === 'commune.email') {
+      const originalFrom = (email as any).from || '';
+      const originalSubject = (email as any).subject || '(no subject)';
+      const originalText = (email as any).text || '';
+      const originalHtml = (email as any).html || '';
+      setImmediate(async () => {
+        try {
+          await resend.emails.send({
+            from: 'shanjai@commune.email',
+            to: ['shanjairajdev@gmail.com'],
+            subject: originalSubject,
+            ...(originalHtml ? { html: originalHtml } : { text: originalText }),
+            reply_to: originalFrom,
+          });
+          logger.info('Personal email forwarded', { subject: originalSubject });
+        } catch (err) {
+          logger.error('Personal email forward failed', { error: err });
+        }
+      });
+    }
+
+    // Schedule graph extraction (debounced 30s — Business/Enterprise only)
+    if (hasFeature(orgTier, 'networkGraph')) {
+      scheduleGraphExtraction(message.thread_id, finalOrgId);
+    }
 
     // ─── Real-time push to frontend ──────────────────────────────
     const rtOrgId = inbox?.orgId || resolvedDomain?.orgId;

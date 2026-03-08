@@ -1,13 +1,14 @@
 import metricsScheduler from './services/metricsScheduler';
+import logger from './utils/logger';
 
 // Initialize monitoring system on server startup
 const initializeMonitoring = (): void => {
-  console.log('🚀 Initializing monitoring system...');
-  
+  logger.info('Initializing monitoring system');
+
   // Start the metrics cache scheduler
   metricsScheduler.startMetricsScheduler();
-  
-  console.log('✅ Monitoring system initialized successfully');
+
+  logger.info('Monitoring system initialized successfully');
 };
 
 export default {

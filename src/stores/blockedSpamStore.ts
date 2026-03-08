@@ -34,6 +34,11 @@ const ensureIndexes = async () => {
       await collection.createIndex({ classification: 1 });
       // TTL index - auto-delete after 90 days
       await collection.createIndex({ blocked_at: 1 }, { expireAfterSeconds: 90 * 24 * 60 * 60 });
+      // Sender domain lookup scoped to org (e.g. "how many blocked from this domain?")
+      await collection.createIndex(
+        { org_id: 1, sender_domain: 1 },
+        { background: true, name: 'spam_by_sender_domain' }
+      );
     }
   } catch (error) {
     logger.error('Failed to ensure blocked spam indexes:', error);

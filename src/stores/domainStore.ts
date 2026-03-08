@@ -1,5 +1,6 @@
 import { getCollection } from '../db';
 import type { DomainEntry, InboxEntry, InboxWebhook } from '../types';
+import logger from '../utils/logger';
 import { randomBytes, randomUUID } from 'crypto';
 import type { WithId } from 'mongodb';
 import { encryptSecretField, decryptSecretField } from '../lib/encryption';
@@ -178,20 +179,30 @@ const getInboxById = async (inboxId: string, orgId?: string) => {
 
   const domain = await collection.findOne(
     { 'inboxes.id': inboxId },
-    { projection: { inboxes: 1 } }
+    { projection: { inboxes: 1, id: 1, name: 1 } }
   );
   if (!domain?.inboxes) {
     return null;
   }
 
-  const inbox = domain.inboxes.find((inbox) => inbox.id === inboxId) || null;
-  
+  const rawInbox = domain.inboxes.find((inbox) => inbox.id === inboxId) || null;
+
   // Check inbox-level orgId for proper isolation (critical for shared default domain)
-  if (inbox && orgId && inbox.orgId && inbox.orgId !== orgId) {
+  if (rawInbox && orgId && rawInbox.orgId && rawInbox.orgId !== orgId) {
     return null;
   }
-  
-  return inbox;
+
+  if (!rawInbox) {
+    return null;
+  }
+
+  // Decrypt webhook secret (same as getInbox / listInboxes via getDomain -> decryptDomainSecrets)
+  const inbox = rawInbox.webhook?.secret
+    ? { ...rawInbox, webhook: { ...rawInbox.webhook, secret: decryptSecretField(rawInbox.webhook.secret) as string } }
+    : rawInbox;
+
+  // Resolve inbox address from the parent domain name
+  return resolveInboxAddress(inbox, domain.name);
 };
 
 const getDomainIdByInboxId = async (inboxId: string) => {
@@ -239,7 +250,7 @@ const upsertInbox = async ({
     if (process.env.DEBUG_INBOX_WEBHOOKS === 'true') {
       const before = existing.webhook ? { ...existing.webhook } : null;
       const after = mergedWebhook ? { ...mergedWebhook } : null;
-      console.log('🧷 Inbox webhook merge', {
+      logger.info('🧷 Inbox webhook merge', {
         domainId,
         inboxId: existing.id,
         localPart: existing.localPart,
@@ -299,7 +310,7 @@ const updateInboxWebhook = async ({
   };
 
   if (process.env.DEBUG_INBOX_WEBHOOKS === 'true') {
-    console.log('🧷 Inbox webhook updated', {
+    logger.info('🧷 Inbox webhook updated', {
       domainId,
       inboxId,
       before: existing || null,

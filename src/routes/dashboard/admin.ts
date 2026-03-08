@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import logger from '../../utils/logger';
 import domainService from '../../services/domainService';
 import domainStore from '../../stores/domainStore';
 import { connect, setupCollections } from '../../db';
@@ -99,10 +100,10 @@ router.post('/migrate/auth', async (req, res) => {
       return res.status(500).json({ error: 'Database not available' });
     }
 
-    console.log('Setting up new collections and indexes...');
+    logger.info('Setting up new collections and indexes...');
     await setupCollections(db);
 
-    console.log('Creating default organization for existing data...');
+    logger.info('Creating default organization for existing data...');
     const defaultOrg = await OrganizationService.createOrganization({
       name: 'Default Organization',
       slug: 'default',
@@ -113,7 +114,7 @@ router.post('/migrate/auth', async (req, res) => {
       }
     });
 
-    console.log('Migrating existing domains to default organization...');
+    logger.info('Migrating existing domains to default organization...');
     const domainsCollection = db.collection('domains');
     const result = await domainsCollection.updateMany(
       { orgId: { $exists: false } },
@@ -129,7 +130,7 @@ router.post('/migrate/auth', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Migration error:', error);
+    logger.error('Migration error:', { error });
     res.status(500).json({
       error: 'Migration failed',
       message: error instanceof Error ? error.message : 'Unknown error'
@@ -159,7 +160,7 @@ router.get('/migrate/status', async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Status check error:', error);
+    logger.error('Status check error:', { error });
     res.status(500).json({
       error: 'Status check failed',
       message: error instanceof Error ? error.message : 'Unknown error'

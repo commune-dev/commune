@@ -22,6 +22,7 @@ const ensureIndexes = async () => {
 
   await collection.createIndex({ email: 1 }, { unique: true });
   await collection.createIndex({ orgId: 1 });
+  await collection.createIndex({ id: 1, status: 1, emailVerified: 1 });
 };
 
 const createUser = async ({

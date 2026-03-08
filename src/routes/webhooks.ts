@@ -1,12 +1,33 @@
 import { Router, raw, json } from 'express';
+import { Queue } from 'bullmq';
 import emailService from '../services/email';
 import domainService from '../services/domainService';
-import { webhookRateLimiter } from '../lib/redisRateLimiter';
+import { webhookRateGuard } from '../lib/redisRateLimiter';
+import { getBullMQConnection } from '../lib/redis';
 import logger from '../utils/logger';
 
 const router = Router();
 const LOG_FULL_WEBHOOKS = process.env.DEBUG_FULL_WEBHOOK_LOGS === 'true';
 const INTERNAL_WEBHOOK_TOKEN = process.env.INTERNAL_WEBHOOK_TOKEN || '';
+
+let inboundQueue: Queue | null = null;
+
+function getInboundQueue(): Queue | null {
+  if (inboundQueue) return inboundQueue;
+  const connection = getBullMQConnection();
+  if (!connection) return null;
+
+  inboundQueue = new Queue('inbound-email', {
+    connection,
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 5000 },
+      removeOnComplete: 500,
+      removeOnFail: 2000,
+    },
+  });
+  return inboundQueue;
+}
 
 const logWebhook = (payload: Record<string, unknown>) => {
   logger.debug('Webhook received', payload);
@@ -36,7 +57,7 @@ const requireInternalToken = (req: any, res: any, next: any) => {
  * Each inbound request carries its domainId in the query string; we verify
  * the raw body using the shared secret before routing the event to the inbox.
  */
-router.post('/', webhookRateLimiter, raw({ type: '*/*' }), async (req, res) => {
+router.post('/', webhookRateGuard, raw({ type: '*/*' }), async (req, res) => {
   const domainId = req.query.domainId as string | undefined;
   const payload = req.body.toString('utf8');
 
@@ -62,6 +83,41 @@ router.post('/', webhookRateLimiter, raw({ type: '*/*' }), async (req, res) => {
     return res.status(400).json({ error: 'Missing Svix headers' });
   }
 
+  const queue = getInboundQueue();
+  const emailId = (() => {
+    try {
+      const parsed = JSON.parse(req.body.toString('utf8'));
+      return parsed?.data?.email_id || null;
+    } catch {
+      return null;
+    }
+  })();
+
+  if (queue) {
+    try {
+      await queue.add(
+        'process-email',
+        {
+          domainId: req.query.domainId as string | undefined,
+          payload: req.body.toString('utf8'),
+          headers: {
+            id,
+            timestamp,
+            signature,
+          },
+          enqueuedAt: Date.now(),
+        },
+        {
+          jobId: emailId ? `email:${emailId}` : undefined,
+        }
+      );
+      return res.status(200).json({ ok: true, queued: true });
+    } catch (err) {
+      logger.warn('Failed to enqueue — falling back to synchronous processing', { error: err });
+    }
+  }
+
+  // Fallback: synchronous processing (Redis down)
   const { data, error } = await emailService.handleInboundWebhook({
     domainId,
     payload,

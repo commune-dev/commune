@@ -1,6 +1,8 @@
 import resend from './resendClient';
+import logger from '../utils/logger';
 import resendHttp, { type WebhookPayload } from './resendHttp';
 import domainStore from '../stores/domainStore';
+import { getRedisClient } from '../lib/redis';
 import type { CreateDomainOptions } from 'resend';
 
 const DEFAULT_REGION = process.env.RESEND_REGION || 'us-east-1';
@@ -92,6 +94,16 @@ const createDomain = async ({
   };
   await domainStore.upsertDomain(entry);
 
+  // Register domain in the spam filter's verified-sender allowlist.
+  // Domains created through Commune's management have customer-configured DKIM/SPF
+  // and should bypass content-based spam scoring for inbound email.
+  const redis = getRedisClient();
+  if (redis && data.name) {
+    redis.sadd('commune:verified:domains', data.name).catch((err) => {
+      logger.warn('Failed to add domain to verified allowlist in Redis:', { error: err });
+    });
+  }
+
   // Register comprehensive webhook for ALL events
   const webhookEndpoint = buildWebhookEndpoint(data.id);
   let webhookData = null;
@@ -102,9 +114,9 @@ const createDomain = async ({
     });
     
     if (webhookError) {
-      console.log('⚠️ Failed to create comprehensive webhook:', webhookError);
+      logger.warn('⚠️ Failed to create comprehensive webhook:', { error: webhookError });
     } else {
-      console.log('🪝 Registered comprehensive webhook:', webhookResponse);
+      logger.info('🪝 Registered comprehensive webhook:', { webhookResponse });
       webhookData = webhookResponse;
       
       const webhookPayload = normalizeWebhookPayload(webhookResponse);

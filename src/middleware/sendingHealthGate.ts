@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import SendingHealthService from '../services/sendingHealthService';
+import logger from '../utils/logger';
 
 interface OrgRequest extends Request {
   orgId?: string;
@@ -47,7 +48,7 @@ export const sendingHealthGate = async (req: OrgRequest, res: Response, next: Ne
     next();
   } catch (err) {
     // Fail open — don't block sends on health check errors
-    console.error('Sending health gate error:', err);
+    logger.error('Sending health gate error:', { error: err });
     next();
   }
 };

@@ -1,6 +1,6 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
 import logger from '../utils/logger';
-import { SearchFilter, SearchOptions, SearchResult, VectorData, ConversationMetadata } from '../types/search';
+import { SearchFilter, SearchOptions, SearchResult, VectorData, ConversationMetadata, EmailSearchFilter, SmsSearchFilter } from '../types/search';
 import { FilterCondition, FieldCondition } from '../types/qdrant';
 import { randomUUID } from 'crypto';
 
@@ -26,6 +26,44 @@ export class QdrantService {
     return QdrantService.instance;
   }
 
+  /**
+   * Ensure all payload indexes exist on a collection.
+   * Idempotent — Qdrant does not error when re-creating an index with the same schema.
+   */
+  private async ensureIndexes(collectionName: string): Promise<void> {
+    const keywordFields = [
+      'organizationId',
+      'inboxId',
+      'domainId',
+      'participants',
+      'channel',
+      'phoneNumberId',
+      'fromNumber',
+      'toNumber',
+    ];
+
+    for (const field of keywordFields) {
+      await this.client.createPayloadIndex(collectionName, {
+        field_name: field,
+        field_schema: 'keyword',
+      }).catch((err) => {
+        // Qdrant is idempotent on existing indexes — only warn for unexpected errors
+        if (!String(err?.message || '').toLowerCase().includes('already exists')) {
+          logger.warn('Failed to ensure Qdrant payload index', { collectionName, field, error: err?.message });
+        }
+      });
+    }
+
+    await this.client.createPayloadIndex(collectionName, {
+      field_name: 'timestamp',
+      field_schema: 'datetime',
+    }).catch((err) => {
+      if (!String(err?.message || '').toLowerCase().includes('already exists')) {
+        logger.warn('Failed to ensure Qdrant timestamp index', { collectionName, error: err?.message });
+      }
+    });
+  }
+
   public async initializeCollection(organizationId: string): Promise<void> {
     const collectionName = this.getCollectionName(organizationId);
 
@@ -33,9 +71,11 @@ export class QdrantService {
       // Check if collection exists
       const collections = await this.client.getCollections();
       const exists = collections.collections.some(c => c.name === collectionName);
-      
+
       if (exists) {
-        logger.info(`Collection ${collectionName} already exists`);
+        // Ensure indexes are up-to-date (idempotent — safe to call on existing collections)
+        await this.ensureIndexes(collectionName);
+        logger.info(`Collection ${collectionName} already exists — indexes verified`);
         return;
       }
 
@@ -45,36 +85,12 @@ export class QdrantService {
           size: 1536, // embed-v-4-0 dimension
           distance: 'Cosine',
         },
-        replication_factor: 2, // For high availability
+        replication_factor: 2,
         write_consistency_factor: 2,
         on_disk_payload: true,
       });
 
-      // Create payload indexes for efficient filtering
-      await this.client.createPayloadIndex(collectionName, {
-        field_name: 'organizationId',
-        field_schema: 'keyword',
-      });
-
-      await this.client.createPayloadIndex(collectionName, {
-        field_name: 'inboxId',
-        field_schema: 'keyword',
-      });
-
-      await this.client.createPayloadIndex(collectionName, {
-        field_name: 'domainId',
-        field_schema: 'keyword',
-      });
-
-      await this.client.createPayloadIndex(collectionName, {
-        field_name: 'participants',
-        field_schema: 'keyword',
-      });
-
-      await this.client.createPayloadIndex(collectionName, {
-        field_name: 'timestamp',
-        field_schema: 'datetime',
-      });
+      await this.ensureIndexes(collectionName);
 
       logger.info(`Initialized collection for organization: ${organizationId}`);
     } catch (error) {
@@ -87,26 +103,25 @@ export class QdrantService {
     try {
       // Ensure collection exists before upserting
       await this.initializeCollection(organizationId);
-      
+
       const collectionName = this.getCollectionName(organizationId);
-      
+
       // Convert string IDs to UUIDs for Qdrant compatibility
       const points = vectors.map(v => {
-        // Generate a UUID from the string ID if it's not already a valid UUID
         const id = this.isValidUUID(v.id) ? v.id : this.stringToUUID(v.id);
-        
+
         return {
           id,
           vector: v.vector,
           payload: {
-            ...v.payload,
+            ...(v.payload as unknown as Record<string, unknown>),
             // Store original message_id in payload for reference
             messageId: v.id,
             timestamp: v.payload.timestamp.toISOString(),
           },
         };
       });
-      
+
       await this.client.upsert(collectionName, {
         wait: true,
         points,
@@ -129,45 +144,45 @@ export class QdrantService {
       const collectionName = this.getCollectionName(organizationId);
       const { limit = 10, offset = 0, minScore = 0.15 } = options;
 
-      // Build filter conditions with strict organization isolation
-      // Build filter conditions with strict organization isolation
-      const must = [
-        {
-          key: 'organizationId',
-          match: { value: organizationId }
-        }
+      // Strict org isolation — always applied
+      const must: Array<{ key: string; match: { value: string } }> = [
+        { key: 'organizationId', match: { value: organizationId } },
       ];
 
-      // Handle inbox filtering
-      if (filter.inboxIds?.length) {
-        must.push({
-          key: 'inboxId',
-          match: { value: filter.inboxIds[0] } // For now, use first inbox
-        });
+      // Channel discriminant — narrows to email or sms payload shape
+      const channelFilter = filter as EmailSearchFilter | SmsSearchFilter;
+      if (channelFilter.channel) {
+        must.push({ key: 'channel', match: { value: channelFilter.channel } });
       }
 
-      // Handle domain filtering
-      if (filter.domainId) {
-        must.push({
-          key: 'domainId',
-          match: { value: filter.domainId }
-        });
+      // Email-specific filters
+      if (channelFilter.channel === 'email') {
+        const ef = channelFilter as EmailSearchFilter;
+        if (ef.inboxIds?.length) {
+          must.push({ key: 'inboxId', match: { value: ef.inboxIds[0] } });
+        }
+        if (ef.domainId) {
+          must.push({ key: 'domainId', match: { value: ef.domainId } });
+        }
       }
 
-      // Handle participant filtering
+      // SMS-specific filters
+      if (channelFilter.channel === 'sms') {
+        const sf = channelFilter as SmsSearchFilter;
+        if (sf.phoneNumberId) {
+          must.push({ key: 'phoneNumberId', match: { value: sf.phoneNumberId } });
+        }
+        if (sf.fromNumber) {
+          must.push({ key: 'fromNumber', match: { value: sf.fromNumber } });
+        }
+        if (sf.toNumber) {
+          must.push({ key: 'toNumber', match: { value: sf.toNumber } });
+        }
+      }
+
+      // Participant filter — applies to both channels
       if (filter.participants?.length) {
-        must.push({
-          key: 'participants',
-          match: { value: filter.participants[0] } // For now, use first participant
-        });
-      }
-
-      // Handle date range filtering
-      if (filter.startDate || filter.endDate) {
-        must.push({
-          key: 'timestamp',
-          match: { value: filter.startDate || filter.endDate || new Date().toISOString() }
-        });
+        must.push({ key: 'participants', match: { value: filter.participants[0] } });
       }
 
       const response = await this.client.search(collectionName, {
@@ -197,6 +212,22 @@ export class QdrantService {
     }
   }
 
+  /** Delete specific points by message ID. Used in testing and cleanup. */
+  public async deletePoints(organizationId: string, messageIds: string[]): Promise<void> {
+    try {
+      const collectionName = this.getCollectionName(organizationId);
+      const uuids = messageIds.map(id => this.isValidUUID(id) ? id : this.stringToUUID(id));
+      await this.client.delete(collectionName, {
+        wait: true,
+        points: uuids,
+      });
+      logger.info(`Deleted ${uuids.length} points for organization: ${organizationId}`);
+    } catch (error) {
+      logger.error('Error deleting points:', error);
+      throw new Error('Failed to delete points');
+    }
+  }
+
   private getCollectionName(organizationId: string): string {
     return `org_${organizationId}_conversations`;
   }
@@ -210,7 +241,7 @@ export class QdrantService {
     // Create a deterministic UUID from a string using MD5-like approach
     // This ensures the same string always produces the same UUID
     const hash = this.simpleHash(str);
-    
+
     // Format as UUID v4
     return [
       hash.substring(0, 8),

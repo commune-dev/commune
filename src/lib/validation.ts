@@ -23,7 +23,9 @@ export const SendEmailSchema = z.object({
   replyTo: emailSchema.optional(),
   thread_id: z.string().optional(),
   domainId: z.string().optional(),
+  domain_id: z.string().optional(),
   inboxId: z.string().optional(),
+  inbox_id: z.string().optional(),
   attachments: z
     .array(
       z.union([
@@ -46,6 +48,13 @@ export const SendEmailSchema = z.object({
       }
       return cleaned;
     }),
+}).transform((data) => {
+  const { inbox_id, domain_id, ...rest } = data;
+  return {
+    ...rest,
+    inboxId: rest.inboxId || inbox_id,
+    domainId: rest.domainId || domain_id,
+  };
 });
 
 // Create domain schema
@@ -53,28 +62,6 @@ export const CreateDomainSchema = z.object({
   name: z.string().min(1, 'Domain name required'),
   region: z.enum(['us-east-1', 'eu-west-1']).optional(),
   capabilities: z.array(z.string()).optional(),
-});
-
-// Create inbox schema
-export const CreateInboxSchema = z.object({
-  localPart: z.string().min(1, 'Local part required').max(64),
-  address: z.string().optional(),
-  display_name: z.string().max(128, 'Display name too long').optional(),
-  displayName: z.string().max(128, 'Display name too long').optional(),
-  agent: z
-    .object({
-      id: z.string().optional(),
-      name: z.string().optional(),
-      metadata: z.record(z.any()).optional(),
-    })
-    .optional(),
-  webhook: z
-    .object({
-      endpoint: z.string().url('Invalid webhook URL'),
-      events: z.array(z.string()).optional(),
-      secret: z.string().optional(),
-    })
-    .optional(),
 });
 
 // Signup schema

@@ -1,4 +1,5 @@
 import { MongoClient, type Db, type Collection, type Document } from 'mongodb';
+import logger from './utils/logger';
 import type { Organization, User, ApiKey, EmailVerificationToken, Session, AgentIdentity, AgentSignup, AgentSignatureNonce } from './types';
 import type { PhoneNumber, SmsSuppression } from './types/phone';
 
@@ -26,20 +27,22 @@ export const connect = async (): Promise<Db | null> => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         client = new MongoClient(uri, {
-          serverSelectionTimeoutMS: 15000,
-          connectTimeoutMS: 15000,
+          maxPoolSize: 100,
+          minPoolSize: 10,
+          serverSelectionTimeoutMS: 5000,
+          connectTimeoutMS: 10000,
           socketTimeoutMS: 45000,
-          maxIdleTimeMS: 30000,
+          maxIdleTimeMS: 60000,
           retryWrites: true,
           retryReads: true,
         });
 
         await client.connect();
         database = client.db();
-        console.log(`Connected to MongoDB (db: ${database.databaseName}) on attempt ${attempt}`);
+        logger.info('Connected to MongoDB', { db: database.databaseName, attempt });
         return database;
       } catch (error) {
-        console.warn(`Failed to connect to MongoDB (attempt ${attempt}/${maxRetries}):`, error instanceof Error ? error.message : error);
+        logger.warn('Failed to connect to MongoDB', { attempt, maxRetries, error: error instanceof Error ? error.message : error });
         client = null;
         if (attempt < maxRetries) {
           await new Promise(r => setTimeout(r, 1000 * attempt));
@@ -62,6 +65,15 @@ export const getCollection = async <T extends Document = Document>(
   }
 
   return db.collection<T>(name);
+};
+
+export const disconnectDB = async (): Promise<void> => {
+  if (client) {
+    await client.close();
+    client = null;
+    database = null;
+    connectingPromise = null;
+  }
 };
 
 export const setupCollections = async (db: Db) => {
@@ -137,6 +149,7 @@ export const setupCollections = async (db: Db) => {
     { key: { id: 1 }, unique: true },
     { key: { orgId: 1 } },
     { key: { twilioSid: 1 }, unique: true },
+    { key: { number: 1 }, unique: true },      // inbound SMS lookup by E.164 (numbers are globally unique)
     { key: { number: 1, orgId: 1 }, unique: true },
     { key: { status: 1 } },
     { key: { orgId: 1, status: 1 } },         // quota counting

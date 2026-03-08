@@ -1,5 +1,6 @@
 import express, { Router } from 'express';
 import { randomUUID } from 'crypto';
+import crypto from 'crypto';
 import domainStore from '../../stores/domainStore';
 import { inboxLimiter } from '../../middleware/rateLimiter';
 import { requireFeature, requireInboxQuota } from '../../middleware/planGate';
@@ -381,6 +382,239 @@ router.delete(
 
     logger.info('Inbox limits removed', { orgId, domainId, inboxId });
     return res.json({ data: inbox });
+  }
+);
+
+// ─── SSRF protection helpers ──────────────────────────────────────
+
+function isPrivateOrRestrictedUrl(urlString: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    return true; // unparseable URL is blocked
+  }
+
+  // Only HTTPS is allowed
+  if (parsed.protocol !== 'https:') return true;
+
+  const hostname = parsed.hostname.toLowerCase();
+
+  // Block localhost variants
+  if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return true;
+
+  // Block link-local / metadata
+  if (hostname === '169.254.169.254' || hostname.endsWith('.169.254.169.254')) return true;
+
+  // Block Railway-internal hostnames
+  if (hostname.endsWith('.railway.internal') || hostname === 'railway.internal') return true;
+
+  // Block RFC-1918 private ranges
+  const ipv4Match = hostname.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [, a, b] = ipv4Match.map(Number);
+    if (a === 10) return true;                             // 10.0.0.0/8
+    if (a === 172 && b >= 16 && b <= 31) return true;     // 172.16.0.0/12
+    if (a === 192 && b === 168) return true;               // 192.168.0.0/16
+    if (a === 127) return true;                            // 127.0.0.0/8 loopback
+  }
+
+  return false;
+}
+
+// ─── Dashboard webhook test ───────────────────────────────────────
+
+/**
+ * POST /api/domains/:domainId/inboxes/:inboxId/webhook-test
+ * Fire a synthetic message.received event to an inbox's configured webhook.
+ * Accepts both JWT (dashboard users) and API key auth via combinedAuth.
+ */
+router.post(
+  '/domains/:domainId/inboxes/:inboxId/webhook-test',
+  express.json(),
+  async (req, res) => {
+    const { domainId, inboxId } = req.params;
+    const orgId = (req as any).apiKey?.orgId || null;
+    if (!orgId) {
+      return res.status(403).json({ error: 'Organization not found' });
+    }
+
+    try {
+      // Verify inbox exists and belongs to this org/domain
+      const inbox = await domainStore.getInbox(domainId, inboxId, orgId);
+      if (!inbox) {
+        return res.status(404).json({ error: 'Inbox not found' });
+      }
+
+      // Check webhook is configured
+      if (!inbox.webhook?.endpoint) {
+        return res.status(400).json({ error: 'No webhook URL configured for this inbox' });
+      }
+
+      const endpoint = inbox.webhook.endpoint;
+
+      // SSRF protection — only allow HTTPS, block private/loopback/metadata IPs
+      if (isPrivateOrRestrictedUrl(endpoint)) {
+        return res.status(400).json({ error: 'Webhook endpoint must be a public HTTPS URL' });
+      }
+
+      const webhookSecret = inbox.webhook.secret;
+      const { event_type = 'message.received' } = req.body || {};
+
+      // Build a realistic synthetic message.received payload
+      const now = new Date().toISOString();
+      const testMessageId = `test_msg_${randomUUID().replace(/-/g, '').slice(0, 20)}`;
+      const testThreadId = `test_thread_${randomUUID().replace(/-/g, '').slice(0, 16)}`;
+      const inboxAddress = inbox.address || (inbox.localPart ? `${inbox.localPart}@example.com` : 'test@example.com');
+
+      const syntheticPayload: Record<string, any> = {
+        domainId,
+        inboxId: inbox.id,
+        inboxAddress,
+        event: {
+          type: 'email.received',
+          data: {
+            email_id: `test_email_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+          },
+        },
+        email: {
+          from: 'test-sender@example.com',
+          to: [inboxAddress],
+          subject: '[Test] Webhook verification from Commune',
+          text: 'This is a synthetic test event sent by Commune to verify your webhook endpoint is working correctly.',
+          html: '<p>This is a synthetic test event sent by Commune to verify your webhook endpoint is working correctly.</p>',
+          message_id: testMessageId,
+          created_at: now,
+          headers: {
+            'message-id': `<${testMessageId}@test.commune.email>`,
+            'x-commune-test': 'true',
+          },
+        },
+        message: {
+          message_id: testMessageId,
+          thread_id: testThreadId,
+          channel: 'email',
+          direction: 'inbound',
+          participants: [
+            { role: 'sender', identity: 'test-sender@example.com' },
+            { role: 'to', identity: inboxAddress },
+          ],
+          content: 'This is a synthetic test event sent by Commune to verify your webhook endpoint is working correctly.',
+          content_html: '<p>This is a synthetic test event sent by Commune to verify your webhook endpoint is working correctly.</p>',
+          attachments: [],
+          created_at: now,
+          metadata: {
+            created_at: now,
+            subject: '[Test] Webhook verification from Commune',
+            inbox_id: inbox.id,
+            inbox_address: inboxAddress,
+            spam_checked: true,
+            spam_score: 0,
+            spam_action: 'accept',
+            spam_flagged: false,
+            prompt_injection_checked: true,
+            prompt_injection_detected: false,
+            prompt_injection_risk: 'none',
+          },
+        },
+        attachments: [],
+        security: {
+          spam: {
+            checked: true,
+            score: 0,
+            action: 'accept',
+            flagged: false,
+          },
+          prompt_injection: {
+            checked: true,
+            detected: false,
+            risk_level: 'none',
+            confidence: 0,
+          },
+        },
+        test: true,
+      };
+
+      // Build signed headers — same format as real delivery
+      const body = JSON.stringify(syntheticPayload);
+      const timestamp = Date.now().toString();
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'x-commune-delivery-id': `test_${randomUUID().replace(/-/g, '').slice(0, 16)}`,
+        'x-commune-timestamp': timestamp,
+        'x-commune-attempt': '1',
+        'x-commune-test': 'true',
+      };
+
+      if (webhookSecret) {
+        const signature = `v1=${crypto
+          .createHmac('sha256', webhookSecret)
+          .update(`${timestamp}.${body}`, 'utf8')
+          .digest('hex')}`;
+        headers['x-commune-signature'] = signature;
+      }
+
+      // Fire with 10-second timeout
+      const start = Date.now();
+      let statusCode: number | null = null;
+      let delivered = false;
+      let errorMessage: string | null = null;
+
+      try {
+        const controller = new AbortController();
+        const timeoutHandle = setTimeout(() => controller.abort(), 10000);
+
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers,
+          body,
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutHandle);
+        statusCode = response.status;
+        delivered = response.ok;
+
+        if (!response.ok) {
+          let responseBody = '';
+          try {
+            responseBody = (await response.text()).slice(0, 500);
+          } catch { /* ignore */ }
+          errorMessage = `HTTP ${response.status}: ${responseBody || response.statusText}`;
+        }
+      } catch (fetchErr: any) {
+        errorMessage = fetchErr.name === 'AbortError'
+          ? 'Timeout after 10000ms'
+          : fetchErr.message || 'Connection failed';
+      }
+
+      const responseTimeMs = Date.now() - start;
+
+      logger.info('Dashboard webhook test fired', {
+        orgId,
+        inboxId: inbox.id,
+        endpoint,
+        delivered,
+        statusCode,
+        responseTimeMs,
+      });
+
+      return res.json({
+        data: {
+          delivered,
+          status_code: statusCode,
+          response_time_ms: responseTimeMs,
+          endpoint,
+          event_type,
+          test: true,
+          ...(errorMessage && { error: errorMessage }),
+        },
+      });
+    } catch (err) {
+      logger.error('Dashboard webhook test exception', { orgId, inboxId, error: err });
+      return res.status(500).json({ error: 'Internal server error' });
+    }
   }
 );
 

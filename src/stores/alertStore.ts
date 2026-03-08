@@ -1,4 +1,5 @@
 import { getCollection } from '../db';
+import logger from '../utils/logger';
 
 interface CalculatedAlert {
   _id?: string;
@@ -33,7 +34,7 @@ const storeAlert = async (alert: CalculatedAlert): Promise<string | null> => {
     
     return result.insertedId;
   } catch (error) {
-    console.error('Error storing alert:', error);
+    logger.error('Error storing alert:', { error });
     return null;
   }
 };
@@ -72,7 +73,7 @@ const getAlerts = async (inboxId: string, timeWindow?: string): Promise<Calculat
     
     return alerts;
   } catch (error) {
-    console.error('Error getting alerts:', error);
+    logger.error('Error getting alerts:', { error });
     return [];
   }
 };

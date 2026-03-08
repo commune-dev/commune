@@ -1,4 +1,4 @@
-import { Router, json, raw } from 'express';
+import { Router, raw } from 'express';
 import { requirePermission } from '../../middleware/permissions';
 import { DmarcReportService } from '../../services/dmarcReportService';
 import logger from '../../utils/logger';
@@ -45,7 +45,7 @@ router.post('/reports', raw({ type: ['application/xml', 'text/xml', 'application
  * List DMARC reports for a domain.
  * Query: domain (required), limit (optional, default 50)
  */
-router.get('/reports', json(), requirePermission('domains:read'), async (req: any, res) => {
+router.get('/reports', requirePermission('domains:read'), async (req: any, res) => {
   const orgId = req.orgId;
   const domain = req.query.domain as string;
   const limit = Math.min(parseInt(req.query.limit as string) || 50, 200);
@@ -69,7 +69,7 @@ router.get('/reports', json(), requirePermission('domains:read'), async (req: an
  * Get DMARC summary for a domain over a time period.
  * Query: domain (required), days (optional, default 30)
  */
-router.get('/summary', json(), requirePermission('domains:read'), async (req: any, res) => {
+router.get('/summary', requirePermission('domains:read'), async (req: any, res) => {
   const orgId = req.orgId;
   const domain = req.query.domain as string;
   const days = Math.min(parseInt(req.query.days as string) || 30, 365);

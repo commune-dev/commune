@@ -1,4 +1,5 @@
 import { getCollection } from '../db';
+import logger from '../utils/logger';
 
 interface MetricsData {
   sent: number;
@@ -115,10 +116,10 @@ const calculateMetrics = async (inboxId: string, timeWindow: string): Promise<Ti
     const deliveryEvents = await getCollection('delivery_events');
     
     if (!messages || !deliveryEvents) {
-      console.error('Database collections not available');
+      logger.error('Database collections not available');
       throw new Error('Required database collections not available');
     }
-    
+
     const startDate = getTimeWindowStart(timeWindow);
 
     const msgMatch: Record<string, unknown> = { 'metadata.inbox_id': inboxId };
@@ -164,7 +165,7 @@ const calculateMetrics = async (inboxId: string, timeWindow: string): Promise<Ti
       calculated_at: new Date().toISOString()
     };
   } catch (error) {
-    console.error('Error calculating metrics:', error);
+    logger.error('Error calculating metrics:', { error });
     throw error;
   }
 };
@@ -174,7 +175,7 @@ const getMultiWindowMetrics = async (inboxId: string): Promise<{ [key: string]: 
   const timeWindows = ['1h', '24h', '7d', '30d'];
   const metricsPromises = timeWindows.map(window => 
     calculateMetrics(inboxId, window).catch(error => {
-      console.error(`Error calculating ${window} metrics:`, error);
+      logger.error('Error calculating metrics for window', { window, error });
       return null;
     })
   );
@@ -197,10 +198,10 @@ const getDomainMetrics = async (domainId: string, timeWindow: string): Promise<T
   const deliveryEvents = await getCollection('delivery_events');
   
   if (!messages || !deliveryEvents) {
-    console.error('Database collections not available');
+    logger.error('Database collections not available');
     throw new Error('Required database collections not available');
   }
-  
+
   const startDate = getTimeWindowStart(timeWindow);
 
   const msgMatch: Record<string, unknown> = { 'metadata.domain_id': domainId };
@@ -247,7 +248,7 @@ const getDomainMetrics = async (domainId: string, timeWindow: string): Promise<T
       calculated_at: new Date().toISOString()
     };
   } catch (error) {
-    console.error('Error calculating domain metrics:', error);
+    logger.error('Error calculating domain metrics:', { error });
     throw error;
   }
 };

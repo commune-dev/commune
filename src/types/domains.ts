@@ -70,4 +70,6 @@ export interface SendMessagePayload {
   domain?: string;
   from?: string;
   localPart?: string;
+  /** Pre-generated message ID from the API layer — used to return a stable ID in the 202 response. */
+  _messageId?: string;
 }

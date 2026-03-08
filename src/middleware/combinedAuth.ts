@@ -18,6 +18,12 @@ if (!process.env.JWT_SECRET) {
   logger.error('JWT_SECRET environment variable is not set — JWT auth will reject all tokens');
 }
 
+// Short-lived user cache so repeated requests from the same authenticated user
+// skip the DB lookup. 60s TTL matches typical request bursts while ensuring
+// revoked/deactivated users are locked out within a minute.
+const USER_CACHE_TTL_MS = 60_000;
+const userCache = new Map<string, { user: User; expiresAt: number }>();
+
 /**
  * Combined auth middleware — tries JWT first, then API key.
  * Used on /api/* dashboard routes that accept both auth methods.
@@ -36,16 +42,27 @@ export const combinedAuth = async (req: AuthenticatedRequest, res: Response, nex
     if (JWT_SECRET) {
       try {
         const decoded = jwt.verify(token, JWT_SECRET) as any;
+        const userId: string = decoded.userId;
+
+        const cachedUser = userCache.get(userId);
+        if (cachedUser && cachedUser.expiresAt > Date.now()) {
+          req.user = cachedUser.user;
+          req.orgId = cachedUser.user.orgId;
+          req.authType = 'jwt';
+          return next();
+        }
+
         const userCollection = await getCollection<User>('users');
-        
+
         if (userCollection) {
           const user = await userCollection.findOne({
-            id: decoded.userId,
+            id: userId,
             status: 'active',
             emailVerified: true
           });
 
           if (user) {
+            userCache.set(userId, { user, expiresAt: Date.now() + USER_CACHE_TTL_MS });
             req.user = user;
             req.orgId = user.orgId;
             req.authType = 'jwt';

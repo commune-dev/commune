@@ -1,4 +1,5 @@
-import { Router, json } from 'express';
+import { Router } from 'express';
+import crypto from 'crypto';
 import emailService from '../../services/email';
 import messageStore from '../../stores/messageStore';
 import { requirePermission } from '../../middleware/permissions';
@@ -11,6 +12,8 @@ import { sendingHealthGate } from '../../middleware/sendingHealthGate';
 import { warmupGate } from '../../middleware/warmupGate';
 import { enforceInboxDailyLimit } from '../../middleware/inboxLimits';
 import { enforceApiKeyEmailLimit } from '../../middleware/apiKeyLimits';
+import { getOutboundEmailQueue } from '../../workers/outboundEmailWorker';
+import { checkIdempotency, storeIdempotencyResult } from '../../lib/idempotency';
 
 const router = Router();
 
@@ -28,44 +31,65 @@ const router = Router();
  *   bcc        - BCC recipients (optional)
  *   reply_to   - Reply-to address (optional)
  *   thread_id  - Existing thread to reply to (optional)
- *   domain_id  - Domain to send from (optional)
- *   inbox_id   - Inbox to send from (optional)
+ *   inboxId    - Inbox to send from (optional, recommended)
+ *   domainId   - Domain to send from (optional, inferred from inboxId)
  *   attachments - Array of attachment IDs from upload (optional)
  */
-router.post('/send', sendingHealthGate, warmupGate, emailRateLimiter, emailDailyRateLimiter, outboundBurstDetector, validateOutboundContent, json({ limit: '2mb' }), requirePermission('messages:write'), validate(SendEmailSchema), enforceInboxDailyLimit, enforceApiKeyEmailLimit, async (req: any, res) => {
-  const orgId = req.orgId;
+router.post('/send', sendingHealthGate, warmupGate, emailRateLimiter, emailDailyRateLimiter, outboundBurstDetector, validateOutboundContent, requirePermission('messages:write'), validate(SendEmailSchema), enforceInboxDailyLimit, enforceApiKeyEmailLimit, async (req: any, res) => {
+  const orgId: string | undefined = req.orgId;
   const payload = req.body;
 
-  // thread_id is now used natively throughout the backend — no remapping needed
+  // Idempotency check — replay cached response if same key seen within 24h
+  const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+  if (idempotencyKey && orgId) {
+    const existing = await checkIdempotency(orgId, idempotencyKey);
+    if (existing) {
+      res.set('Idempotency-Replayed', 'true');
+      return res.status(existing.statusCode).json(existing.body);
+    }
+  }
 
+  // Pre-generate message ID so the 202 response can include it
+  const preGeneratedId = `msg_${crypto.randomUUID().replace(/-/g, '')}`;
+
+  // Enqueue via BullMQ and return 202 immediately — no blocking wait.
+  const queue = getOutboundEmailQueue();
+
+  if (queue) {
+    try {
+      const job = await queue.add('send', { payload: { ...payload, orgId, _messageId: preGeneratedId } });
+      logger.info('v1: Email queued', { orgId, jobId: job.id, to: payload.to, messageId: preGeneratedId });
+
+      const responseBody = { data: { id: preGeneratedId, status: 'queued' } };
+
+      if (idempotencyKey && orgId) {
+        await storeIdempotencyResult(orgId, idempotencyKey, 202, responseBody);
+      }
+
+      return res.status(202).json(responseBody);
+    } catch (err) {
+      logger.error('v1: Email queue error', { orgId, error: err });
+      return res.status(500).json({ error: 'Failed to queue email' });
+    }
+  }
+
+  // Should not reach here (Redis is always available), but keep as safety net
   try {
-    const result = await emailService.sendEmail({
-      ...payload,
-      orgId: orgId || undefined,
-    });
+    const result = await emailService.sendEmail({ ...payload, orgId: orgId || undefined });
 
     if (result.error) {
-      logger.warn('v1: Email send failed', { orgId, error: result.error, to: payload.to });
       return res.status(400).json({ error: result.error, validation: (result as any).validation });
     }
 
-    const response: Record<string, unknown> = { data: result.data };
-    if ((result as any).validation) {
-      const v = (result as any).validation;
-      if (v.rejected?.length > 0 || v.warnings?.length > 0 || v.suppressed?.length > 0) {
-        response.validation = {
-          ...(v.rejected?.length > 0 && { rejected: v.rejected }),
-          ...(v.warnings?.length > 0 && { warnings: v.warnings }),
-          ...(v.suppressed?.length > 0 && { suppressed: v.suppressed }),
-          duration_ms: v.duration_ms,
-        };
-      }
+    const responseBody = { data: { id: preGeneratedId, status: 'queued' } };
+
+    if (idempotencyKey && orgId) {
+      await storeIdempotencyResult(orgId, idempotencyKey, 202, responseBody);
     }
 
-    logger.info('v1: Email sent', { orgId, messageId: result.data?.id });
-    return res.json(response);
+    return res.status(202).json(responseBody);
   } catch (err) {
-    logger.error('v1: Email send exception', { orgId, error: err });
+    logger.error('v1: Email send exception (no queue)', { orgId, error: err });
     return res.status(500).json({ error: 'Failed to send email' });
   }
 });

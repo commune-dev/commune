@@ -13,6 +13,9 @@ import { buildUnsubscribeUrl } from '../../lib/unsubscribeToken';
 import { sanitizeCustomHeaders } from '../../lib/sanitize';
 import { encodeThreadToken } from '../../lib/threadToken';
 import { extractEmailAddress, normalizeRecipient } from './helpers';
+import { scheduleGraphExtraction } from '../graphExtractionService';
+import { resolveOrgTier } from '../../lib/tierResolver';
+import { hasFeature } from '../../config/rateLimits';
 import logger from '../../utils/logger';
 
 const DEFAULT_FROM_EMAIL = process.env.DEFAULT_FROM_EMAIL;
@@ -337,9 +340,11 @@ const sendEmail = async (payload: SendMessagePayload & { orgId?: string }) => {
       // - message_id: the Resend-format ID that recipients actually see (<id@resend.dev>)
       // - custom_message_id: our custom ID (<uuid@domain>) for internal reference
       // - resend_id: the plain Resend API response ID (no angle brackets)
+      // - commune_message_id: pre-generated stable ID returned in 202 responses
       message_id: resendMessageId,
       custom_message_id: outboundMessageId,
       resend_id: resendId,
+      commune_message_id: payload._messageId || null,
       in_reply_to: headers['In-Reply-To'] || null,
       references: headers.References ? String(headers.References).split(' ') : [],
       domain_id: payload.domainId || null,
@@ -353,8 +358,17 @@ const sendEmail = async (payload: SendMessagePayload & { orgId?: string }) => {
 
   await messageStore.insertMessage(sentMessage);
 
-  // Index sent email for vector search (with attachment metadata)
-  await EmailProcessor.getInstance().processMessage(sentMessage);
+  // Index sent email for vector search — fire-and-forget (Qdrant does not need to
+  // complete before returning the API response; saves 50-200ms per send)
+  EmailProcessor.getInstance().processMessage(sentMessage).catch(err =>
+    logger.error('Vector indexing failed (outbound)', { messageId: sentMessage.message_id, error: err })
+  );
+
+  // Schedule graph extraction (debounced 30s — Business/Enterprise only)
+  const sendTier = await resolveOrgTier(sentMessage.orgId);
+  if (hasFeature(sendTier, 'networkGraph')) {
+    scheduleGraphExtraction(sentMessage.thread_id, sentMessage.orgId);
+  }
 
   // Note: We don't store a 'sent' delivery event here because Resend's email.sent
   // webhook will fire shortly and the webhook handler will record it. Storing it

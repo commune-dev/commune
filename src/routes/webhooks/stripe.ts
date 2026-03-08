@@ -3,6 +3,8 @@ import Stripe from 'stripe';
 import { getStripe, getPlanFromPriceId, getBillingCycleFromInterval } from '../../lib/stripe';
 import { connect } from '../../db';
 import { invalidateTierCache } from '../../lib/tierResolver';
+import { creditStore } from '../../stores/creditStore';
+import { PLAN_PHONE_CREDITS } from '../../config/smsCosts';
 import logger from '../../utils/logger';
 
 const router = Router();
@@ -55,21 +57,13 @@ router.post('/stripe', async (req: Request, res: Response) => {
 
       case 'invoice.paid': {
         const invoice = event.data.object as Stripe.Invoice;
-        logger.info('Invoice paid', {
-          invoiceId: invoice.id,
-          customerId: invoice.customer,
-          amount: invoice.amount_paid,
-        });
+        await handleInvoicePaid(stripe, invoice);
         break;
       }
 
       case 'invoice.payment_failed': {
         const invoice = event.data.object as Stripe.Invoice;
-        logger.warn('Invoice payment failed', {
-          invoiceId: invoice.id,
-          customerId: invoice.customer,
-          amount: invoice.amount_due,
-        });
+        await handleInvoicePaymentFailed(invoice);
         break;
       }
 
@@ -85,11 +79,29 @@ router.post('/stripe', async (req: Request, res: Response) => {
 
 async function handleCheckoutCompleted(stripe: Stripe, session: Stripe.Checkout.Session) {
   const orgId = session.metadata?.orgId;
+  const purchaseType = session.metadata?.purchase_type;
+
+  if (!orgId) {
+    logger.warn('Checkout session missing orgId', { sessionId: session.id });
+    return;
+  }
+
+  // ── Credit bundle purchase ──────────────────────────────────────
+  if (purchaseType === 'credits') {
+    const credits = parseInt(session.metadata?.credits ?? '0', 10);
+    if (credits > 0) {
+      await creditStore.addPurchasedCredits(orgId, credits, session.payment_intent as string ?? session.id);
+      logger.info('Credits added via checkout', { orgId, credits, sessionId: session.id });
+    }
+    return;
+  }
+
+  // ── Subscription upgrade ────────────────────────────────────────
   const plan = session.metadata?.plan;
   const billingCycle = session.metadata?.billingCycle;
 
-  if (!orgId || !plan) {
-    logger.warn('Checkout session missing metadata', { sessionId: session.id });
+  if (!plan) {
+    logger.warn('Checkout session missing plan metadata', { sessionId: session.id });
     return;
   }
 
@@ -121,15 +133,69 @@ async function handleCheckoutCompleted(stripe: Stripe, session: Stripe.Checkout.
     }
   );
 
-  // Invalidate cached tier so rate limiters pick up new limits immediately
+  // Seed initial credits for the new plan
+  const planCredits = PLAN_PHONE_CREDITS[plan];
+  if (planCredits && isFinite(planCredits)) {
+    const cycleResetAt = new Date();
+    cycleResetAt.setMonth(cycleResetAt.getMonth() + 1);
+    await creditStore.resetIncludedCredits(orgId, planCredits, cycleResetAt);
+    logger.info('Initial credits seeded on plan upgrade', { orgId, plan, credits: planCredits });
+  }
+
   invalidateTierCache(orgId);
 
-  logger.info('Organization upgraded via checkout', {
-    orgId,
+  logger.info('Organization upgraded via checkout', { orgId, plan, billingCycle, customerId, subscriptionId });
+}
+
+async function handleInvoicePaid(stripe: Stripe, invoice: Stripe.Invoice) {
+  const customerId = typeof invoice.customer === 'string'
+    ? invoice.customer
+    : (invoice.customer as any)?.id;
+
+  if (!customerId) return;
+
+  const db = await connect();
+  if (!db) return;
+
+  const org = await db.collection('organizations').findOne({ stripe_customer_id: customerId });
+  if (!org) {
+    logger.warn('No org found for Stripe customer on invoice.paid', { customerId });
+    return;
+  }
+
+  // Determine plan from subscription
+  const invoiceAny = invoice as any;
+  const subscriptionId = typeof invoiceAny.subscription === 'string'
+    ? invoiceAny.subscription
+    : invoiceAny.subscription?.id;
+
+  if (!subscriptionId) return; // One-time payment, not a subscription renewal
+
+  const subscription = await stripe.subscriptions.retrieve(subscriptionId) as any;
+  const priceId = subscription.items?.data[0]?.price?.id;
+  const plan = priceId ? getPlanFromPriceId(priceId) : org.tier;
+
+  if (!plan) return;
+
+  const planCredits = PLAN_PHONE_CREDITS[plan];
+  if (!planCredits || !isFinite(planCredits)) return;
+
+  // Reset included credits for new billing cycle
+  const periodEnd = subscription.current_period_end;
+  const cycleResetAt = periodEnd ? new Date(periodEnd * 1000) : (() => {
+    const d = new Date(); d.setMonth(d.getMonth() + 1); return d;
+  })();
+
+  await creditStore.resetIncludedCredits(org.id, planCredits, cycleResetAt);
+
+  // Charge for active phone numbers (monthly rental)
+  await creditStore.chargeForActivePhoneNumbers(org.id);
+
+  logger.info('Invoice paid: credits reset', {
+    orgId: org.id,
     plan,
-    billingCycle,
-    customerId,
-    subscriptionId,
+    credits: planCredits,
+    cycleResetAt,
   });
 }
 
@@ -212,6 +278,37 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
 
     logger.info('Subscription deleted, org downgraded to free', { customerId });
   }
+}
+
+async function handleInvoicePaymentFailed(invoice: Stripe.Invoice) {
+  const customerId = typeof invoice.customer === 'string'
+    ? invoice.customer
+    : (invoice.customer as any)?.id;
+
+  if (!customerId) return;
+
+  const db = await connect();
+  if (!db) return;
+
+  const org = await db.collection('organizations').findOne({ stripe_customer_id: customerId });
+  if (!org) {
+    logger.warn('No org found for Stripe customer on invoice.payment_failed', { customerId });
+    return;
+  }
+
+  // Suspend all active phone numbers due to non-payment
+  const result = await db.collection('phone_numbers').updateMany(
+    { orgId: org.id, status: 'active' },
+    { $set: { status: 'suspended_non_payment', updatedAt: new Date().toISOString() } }
+  );
+
+  logger.warn('Invoice payment failed — phone numbers suspended', {
+    orgId: org.id,
+    customerId,
+    invoiceId: invoice.id,
+    amountDue: invoice.amount_due,
+    suspendedCount: result.modifiedCount,
+  });
 }
 
 export default router;

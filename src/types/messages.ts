@@ -1,4 +1,4 @@
-export type Channel = 'email';
+export type Channel = 'email' | 'sms';
 export type Direction = 'inbound' | 'outbound';
 export type ParticipantRole =
   | 'sender'
@@ -24,7 +24,7 @@ export interface MessageMetadata {
   inbox_address?: string | null;
   message_id?: string | null;
   resend_id?: string | null;
-  delivery_status?: 'sent' | 'delivered' | 'bounced' | 'failed' | 'complained';
+  delivery_status?: 'sent' | 'delivered' | 'bounced' | 'failed' | 'complained' | 'suppressed' | 'blocked' | 'credit_limit';
   delivery_data?: {
     sent_at?: string;
     delivered_at?: string;
@@ -61,6 +61,16 @@ export interface MessageMetadata {
   attachment_ids?: string[];
   has_attachments?: boolean;
   attachment_count?: number;
+  commune_message_id?: string | null;
+  // SMS-specific
+  phone_number_id?: string;
+  from_number?: string;
+  to_number?: string;
+  twilio_sid?: string;
+  sms_segments?: number;
+  credits_charged?: number;
+  num_media?: number;
+  mms_media?: Array<{ url: string; contentType: string; storageUrl?: string; attachmentId?: string }>;
 }
 
 export interface UnifiedMessage {
@@ -76,6 +86,10 @@ export interface UnifiedMessage {
   attachments: string[];
   created_at: string;
   metadata: MessageMetadata;
+  /** Pre-computed sort key: thread_id if present, else message_id. Stored as a real field so MongoDB can use an index instead of sorting on a computed $addFields value. */
+  effective_thread_id?: string;
+  /** Plaintext search summary for $regex queries. Stored unencrypted alongside encrypted content/subject so search actually works. */
+  search_summary?: string;
 }
 
 export interface AttachmentRecord {

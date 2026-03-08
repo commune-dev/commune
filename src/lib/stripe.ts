@@ -36,7 +36,7 @@ export const COMMUNE_PLANS = {
   },
   agent_pro: {
     name: 'Agent Pro',
-    monthlyPrice: 19,
+    monthlyPrice: 20,
     yearlyPrice: 16,
     stripePriceIds: {
       monthly: process.env.STRIPE_PRICE_AGENT_PRO_MONTHLY || null,
@@ -59,8 +59,8 @@ export const COMMUNE_PLANS = {
   },
   business: {
     name: 'Business',
-    monthlyPrice: 49,
-    yearlyPrice: 41,
+    monthlyPrice: 150,
+    yearlyPrice: 120,
     stripePriceIds: {
       monthly: process.env.STRIPE_PRICE_BUSINESS_MONTHLY || null,
       yearly: process.env.STRIPE_PRICE_BUSINESS_YEARLY || null,
@@ -72,6 +72,7 @@ export const COMMUNE_PLANS = {
       '5,000 emails/day total',
       '5 GB attachment storage',
       'Everything in Agent Pro',
+      'Conversation network graph',
       'Domain warmup',
       'Circuit breaker protection',
       'Attachment scanning (ClamAV)',

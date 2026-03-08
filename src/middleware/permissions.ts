@@ -15,6 +15,10 @@ export const PERMISSION_SCOPES = [
   'messages:write',
   'attachments:read',
   'attachments:write',
+  'phoneNumbers:read',
+  'phoneNumbers:write',
+  'sms:read',
+  'sms:write',
 ] as const;
 
 export type PermissionScope = (typeof PERMISSION_SCOPES)[number];
@@ -25,6 +29,8 @@ const LEGACY_READ_SCOPES: PermissionScope[] = [
   'threads:read',
   'messages:read',
   'attachments:read',
+  'phoneNumbers:read',
+  'sms:read',
 ];
 
 const LEGACY_WRITE_SCOPES: PermissionScope[] = [
@@ -33,6 +39,8 @@ const LEGACY_WRITE_SCOPES: PermissionScope[] = [
   'threads:write',
   'messages:write',
   'attachments:write',
+  'phoneNumbers:write',
+  'sms:write',
 ];
 
 /**
@@ -92,4 +100,30 @@ export const requirePermission = (...scopes: PermissionScope[]) => {
 
     return next();
   };
+};
+
+/**
+ * Middleware that restricts an endpoint to admin API keys only.
+ *
+ * - JWT (dashboard) users always pass — they have their own role system.
+ * - Agent signature auth always passes — agents are org owners.
+ * - API keys: `isAdmin === true` OR `isAdmin === undefined` (backward compat —
+ *   keys created before this field existed are treated as admin).
+ *   Only keys explicitly created with `isAdmin: false` are blocked.
+ */
+export const requireAdminApiKey = (req: any, res: Response, next: NextFunction): void => {
+  if (req.authType === 'jwt') { next(); return; }
+  if (req.authType === 'agent') { next(); return; }
+
+  const isAdmin: boolean | undefined = req.apiKeyData?.isAdmin;
+  if (isAdmin === false) {
+    res.status(403).json({
+      error: 'admin_key_required',
+      message: 'This operation requires an admin API key. Standard API keys cannot buy, release, or configure phone numbers.',
+      hint: 'Create an admin API key from the dashboard to perform this action.',
+    });
+    return;
+  }
+
+  next();
 };

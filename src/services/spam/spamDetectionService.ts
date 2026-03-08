@@ -5,7 +5,9 @@ import { ReputationCalculator } from './reputationCalculator';
 import { MassEmailDetector } from './massEmailDetector';
 import reputationStore from '../../stores/reputationStore';
 import blockedSpamStore from '../../stores/blockedSpamStore';
+import domainStore from '../../stores/domainStore';
 import { SpamAnalysisResult, IncomingEmail } from '../../types/spam';
+import { getRedisClient } from '../../lib/redis';
 import logger from '../../utils/logger';
 
 export class SpamDetectionService {
@@ -56,6 +58,55 @@ export class SpamDetectionService {
         };
       }
 
+      // Check if the sender domain is verified through Commune's domain management.
+      // Verified domains have passed DKIM/SPF setup and belong to paying customers —
+      // they are not spam sources. Skip content analysis entirely for them so that
+      // AI agent emails containing transactional terms ("verify account", "password reset")
+      // don't accumulate false-positive content scores.
+      const senderDomain = email.from.split('@')[1] || '';
+      const isVerified = await this.isVerifiedSenderDomain(senderDomain);
+
+      if (isVerified) {
+        // Verified senders still go through rate limiting (MassEmailDetector)
+        // and DNSBL (deferred async), but skip content scoring entirely.
+        const senderScore = await this.getSenderReputation(email.from);
+        const domainScore = await this.getDomainReputation(senderDomain, email.headers);
+
+        // Still run mass-email check so the burst window is tracked — use the
+        // verified-sender flag so the much higher threshold applies.
+        if (orgId) {
+          await this.massEmailDetector.checkMassEmailAttack(
+            orgId,
+            email.from,
+            0, // no content score for verified senders
+            domainScore,
+            true // isVerifiedSender
+          );
+        }
+
+        await this.updateSenderStats(email.from, 0, 0);
+
+        logger.info('Verified sender — content scoring bypassed', {
+          from: email.from,
+          domain: senderDomain,
+        });
+
+        return {
+          action: 'accept',
+          spam_score: 0,
+          confidence: 1.0,
+          reasons: [],
+          details: {
+            content_score: 0,
+            link_score: 0,
+            sender_reputation: senderScore,
+            domain_reputation: domainScore,
+            verified_sender: true,
+          },
+          processing_time_ms: Date.now() - startTime,
+        };
+      }
+
       // Run all analyses in parallel
       const [contentScore, linkScore, senderScore] = await Promise.all([
         this.contentAnalyzer.analyze(email.content || email.html || '', email.subject),
@@ -64,8 +115,7 @@ export class SpamDetectionService {
       ]);
 
       // Get domain reputation
-      const domain = email.from.split('@')[1] || '';
-      const domainScore = await this.getDomainReputation(domain, email.headers);
+      const domainScore = await this.getDomainReputation(senderDomain, email.headers);
 
       // Check for mass email attack
       let massAttackResult;
@@ -74,7 +124,8 @@ export class SpamDetectionService {
           orgId,
           email.from,
           contentScore.spam_score,
-          domainScore
+          domainScore,
+          false // not a verified sender
         );
 
         // If mass attack detected and should reject this email
@@ -211,6 +262,48 @@ export class SpamDetectionService {
     }
   }
 
+  /**
+   * Returns true if the given domain has been set up through Commune's domain management
+   * (i.e. the customer provided DKIM/SPF records). These senders are verified and should
+   * skip content-based spam scoring — they are legitimate customers, not spam sources.
+   *
+   * Lookup order:
+   *  1. Redis set `commune:verified:domains` (populated on domain creation — fast path)
+   *  2. MongoDB `domains` collection (fallback when Redis is unavailable)
+   */
+  private async isVerifiedSenderDomain(domain: string): Promise<boolean> {
+    if (!domain) return false;
+
+    try {
+      // Fast path: Redis allowlist
+      const redis = getRedisClient();
+      if (redis) {
+        const isMember = await redis.sismember('commune:verified:domains', domain);
+        if (isMember) return true;
+      }
+
+      // Fallback: MongoDB domains collection
+      const domainEntry = await domainStore.getDomainByName(domain);
+      if (domainEntry) {
+        // Backfill Redis so the next lookup is fast
+        if (redis) {
+          redis.sadd('commune:verified:domains', domain).catch((err) =>
+            logger.warn('Redis backfill failed for verified domain', { domain, error: err })
+          );
+        }
+        return true;
+      }
+
+      return false;
+    } catch (error) {
+      logger.warn('isVerifiedSenderDomain check failed — defaulting to unverified', {
+        domain,
+        error,
+      });
+      return false;
+    }
+  }
+
   private async getSenderReputation(email: string): Promise<number> {
     try {
       const score = await reputationStore.getSpamScore(email);
@@ -230,16 +323,26 @@ export class SpamDetectionService {
 
   private async getDomainReputation(domain: string, headers: Record<string, string>): Promise<number> {
     try {
-      // Check DNSBL
+      // Deferred DNSBL check — does not block this call, updates reputation store async
       const ip = this.dnsblChecker.extractIPFromHeaders(headers);
       if (ip) {
-        const blacklistResult = await this.dnsblChecker.checkBlacklists(ip, domain);
-        if (blacklistResult.is_blacklisted) {
-          return 0.8; // High spam score for blacklisted domains
-        }
+        setImmediate(async () => {
+          try {
+            const blacklistResult = await this.dnsblChecker.checkBlacklists(ip, domain);
+            if (blacklistResult.is_blacklisted) {
+              await reputationStore.updateDomainReputation(domain, {
+                is_blacklisted: true,
+                reputation_score: 0.2,
+              });
+              logger.info('Deferred DNSBL hit — domain reputation updated', { domain, ip });
+            }
+          } catch (err) {
+            logger.warn('Deferred DNSBL check failed', { domain, error: err });
+          }
+        });
       }
 
-      // Check stored domain reputation
+      // Check stored domain reputation (synchronous path)
       const domainRep = await reputationStore.getDomainReputation(domain);
       if (domainRep) {
         if (domainRep.is_blacklisted) {

@@ -18,6 +18,32 @@ const ensureIndexes = async () => {
     await messages.createIndex({ 'metadata.message_id': 1 }); // For thread resolution by SMTP Message-ID
     await messages.createIndex({ 'metadata.resend_id': 1 });  // For thread resolution by Resend API ID
     await messages.createIndex({ 'metadata.routing_token': 1 }); // For routing token DB fallback
+    // Index for listThreads grouping/sorting on the pre-computed effective_thread_id field
+    await messages.createIndex({ orgId: 1, effective_thread_id: 1, created_at: -1 });
+    // Index for searchThreads $regex on plaintext search_summary
+    await messages.createIndex({ orgId: 1, search_summary: 1 });
+    // Dashboard inbox view: org-scoped inbox query with time sort
+    await messages.createIndex(
+      { orgId: 1, 'metadata.inbox_id': 1, created_at: -1 },
+      { background: true, name: 'messages_inbox_view' }
+    );
+    // updateDeliveryStatus / getMessage / updateMessage query on message_id alone;
+    // the existing compound { channel: 1, message_id: 1 } unique index cannot serve
+    // single-field message_id lookups efficiently.
+    await messages.createIndex(
+      { message_id: 1 },
+      { background: true, name: 'messages_by_message_id' }
+    );
+    // Delivery status queries (e.g. "find all bounced emails for an inbox")
+    await messages.createIndex(
+      { 'metadata.inbox_id': 1, 'metadata.delivery_status': 1 },
+      { background: true, name: 'messages_delivery_status' }
+    );
+    // Thread lookup by orgId — thread_id is a top-level field on UnifiedMessage
+    await messages.createIndex(
+      { orgId: 1, thread_id: 1, created_at: -1 },
+      { background: true, name: 'messages_by_thread' }
+    );
   }
   if (attachments) {
     await attachments.createIndex({ attachment_id: 1 }, { unique: true });
@@ -37,12 +63,31 @@ const insertMessage = async (message: UnifiedMessage) => {
   const rawCreatedAt = message.created_at || message.metadata?.created_at || new Date().toISOString();
   const createdAt = new Date(rawCreatedAt).toISOString();
 
+  // Pre-compute effective_thread_id at write time so listThreads can sort on a real
+  // indexed field instead of a computed $addFields value (which forces a full in-memory sort).
+  const effectiveThreadId = message.thread_id || message.message_id;
+
+  // Build a plaintext search_summary BEFORE encryption so searchThreads $regex can
+  // actually match. metadata.subject and content are encrypted after this point —
+  // regex on ciphertext never produces meaningful matches.
+  const senderParticipant = message.participants?.find((p) => p.role === 'sender');
+  const searchSummary = [
+    message.metadata?.subject ?? '',
+    senderParticipant?.identity ?? '',
+    message.content ? message.content.substring(0, 500) : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
   const { orgId, ...rest } = message;
   const rawDoc = {
     ...rest,
     ...(orgId ? { orgId } : {}),
     _id: message._id || randomUUID(),
     created_at: createdAt,
+    effective_thread_id: effectiveThreadId,
+    search_summary: searchSummary,
     metadata: {
       ...message.metadata,
       created_at: createdAt,
@@ -381,6 +426,7 @@ const listThreads = async ({
   cursor,
   order = 'desc',
   orgId,
+  channel,
 }: {
   inboxId?: string;
   domainId?: string;
@@ -388,6 +434,7 @@ const listThreads = async ({
   cursor?: string;
   order?: 'asc' | 'desc';
   orgId?: string;
+  channel?: string;
 }) => {
   const messages = await getCollection<UnifiedMessage>('messages');
   if (!messages) {
@@ -398,6 +445,7 @@ const listThreads = async ({
   if (inboxId) matchFilter['metadata.inbox_id'] = inboxId;
   if (domainId) matchFilter['metadata.domain_id'] = domainId;
   if (orgId) matchFilter.orgId = orgId;
+  if (channel) matchFilter.channel = channel;
 
   // Decode cursor: base64 encoded JSON { last_message_at, id }
   let cursorFilter: Record<string, unknown> | null = null;
@@ -429,12 +477,14 @@ const listThreads = async ({
 
   const pipeline: Record<string, unknown>[] = [
     { $match: matchFilter },
-    // Coalesce thread_id: use thread_id if present, else fall back to message_id
-    // so messages stored before the threading fix don't all group into null.
+    // Use the pre-computed effective_thread_id field written at insert time.
+    // This avoids a $addFields stage that forces a full in-memory sort — MongoDB
+    // can now satisfy the sort with the { orgId, effective_thread_id, created_at } index.
+    // For legacy documents that pre-date this field, fall back via $ifNull at query time only.
     {
       $addFields: {
         _effective_thread_id: {
-          $ifNull: ['$thread_id', '$message_id'],
+          $ifNull: ['$effective_thread_id', { $ifNull: ['$thread_id', '$message_id'] }],
         },
       },
     },
@@ -852,11 +902,12 @@ const searchThreads = async ({
   // Escape regex special chars for safe $regex usage
   const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+  // search_summary is stored as plaintext (lowercased) at write time — it contains
+  // the subject, sender identity, and first 500 chars of the message body before
+  // encryption. Matching against the encrypted metadata.subject / content fields
+  // never works because they carry an "enc:" prefix and random ciphertext.
   const matchFilter: Record<string, unknown> = {
-    $or: [
-      { 'metadata.subject': { $regex: escaped, $options: 'i' } },
-      { content: { $regex: escaped, $options: 'i' } },
-    ],
+    search_summary: { $regex: escaped, $options: 'i' },
   };
   if (inboxId) matchFilter['metadata.inbox_id'] = inboxId;
   if (domainId) matchFilter['metadata.domain_id'] = domainId;

@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import DomainWarmupService from '../services/domainWarmupService';
 import domainStore from '../stores/domainStore';
+import logger from '../utils/logger';
 
 interface OrgRequest extends Request {
   orgId?: string;
@@ -65,7 +66,7 @@ export const warmupGate = async (req: OrgRequest, res: Response, next: NextFunct
     next();
   } catch (err) {
     // Fail open — don't block sends on warmup check errors
-    console.error('Warmup gate error:', err);
+    logger.error('Warmup gate error:', { error: err });
     next();
   }
 };

@@ -1,6 +1,6 @@
 import { VectorService } from './vectorService';
 import { QdrantService } from './qdrantService';
-import { SearchFilter, SearchOptions, SearchResult } from '../types/search';
+import { SearchFilter, SearchOptions, SearchResult, ConversationMetadata } from '../types/search';
 import logger from '../utils/logger';
 
 export class SearchService {
@@ -51,15 +51,7 @@ export class SearchService {
       id: string;
       subject: string;
       content: string;
-      metadata: {
-        subject: string;
-        organizationId: string;
-        inboxId: string;
-        domainId: string;
-        participants: string[];
-        threadId: string;
-        timestamp: Date;
-      };
+      metadata: ConversationMetadata;
     }
   ): Promise<void> {
     try {
@@ -67,7 +59,7 @@ export class SearchService {
       const text = await this.vectorService.prepareConversationText({
         subject: conversation.subject,
         content: conversation.content,
-        metadata: conversation.metadata,
+        metadata: conversation.metadata as unknown as Record<string, unknown>,
       });
 
       // Generate embedding
@@ -93,25 +85,17 @@ export class SearchService {
       id: string;
       subject: string;
       content: string;
-      metadata: {
-        subject: string;
-        organizationId: string;
-        inboxId: string;
-        domainId: string;
-        participants: string[];
-        threadId: string;
-        timestamp: Date;
-      };
+      metadata: ConversationMetadata;
     }>
   ): Promise<void> {
     try {
       // Prepare texts for embedding
       const texts = await Promise.all(
-        conversations.map(conv => 
+        conversations.map(conv =>
           this.vectorService.prepareConversationText({
             subject: conv.subject,
             content: conv.content,
-            metadata: conv.metadata,
+            metadata: conv.metadata as unknown as Record<string, unknown>,
           })
         )
       );

@@ -1,6 +1,6 @@
 {
   "name": "@commune/server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "commonjs",
   "scripts": {
     "dev": "ts-node src/server.ts",
@@ -19,7 +19,9 @@
     "@types/bcryptjs": "^2.4.6",
     "@types/jsonwebtoken": "^9.0.10",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.70.1",
     "cloudinary": "^2.9.0",
+    "compression": "^1.8.1",
     "disposable-email-domains": "^1.0.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
@@ -29,15 +31,18 @@
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^6.12.0",
     "openai": "^4.28.0",
+    "rate-limit-redis": "^4.3.1",
     "resend": "^3.2.0",
     "stripe": "^20.3.1",
     "svix": "^1.32.0",
+    "twilio": "^5.12.2",
     "validator": "^13.12.0",
     "winston": "^3.11.0",
     "ws": "^8.19.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.2",
     "@types/validator": "^13.11.9",

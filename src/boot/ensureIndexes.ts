@@ -18,6 +18,8 @@ import deletionRequestStore from '../stores/deletionRequestStore';
 import TokenGuard from '../lib/tokenGuard';
 import { AgentIdentityStore } from '../stores/agentIdentityStore';
 import { AgentSignupStore } from '../stores/agentSignupStore';
+import * as callStore from '../stores/callStore';
+import { ensureVoiceIndexes } from '../stores/voiceIndexes';
 
 interface IndexTask {
   name: string;
@@ -49,6 +51,8 @@ export const runAllIndexCreation = async (): Promise<void> => {
     { name: 'tokenGuard', fn: () => TokenGuard.ensureIndexes() },
     { name: 'agentIdentityStore', fn: () => AgentIdentityStore.ensureIndexes() },
     { name: 'agentSignupStore', fn: () => AgentSignupStore.ensureIndexes() },
+    { name: 'callStore', fn: () => callStore.ensureIndexes() },
+    { name: 'voiceIndexes', fn: () => ensureVoiceIndexes() },
   ];
 
   logger.info('Running database index creation', { count: tasks.length });

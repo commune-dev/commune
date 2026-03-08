@@ -5,13 +5,19 @@ export class ContentAnalyzer {
   private static instance: ContentAnalyzer;
 
   private spamKeywords = [
-    'urgent', 'act now', 'limited time', 'click here', 'verify account',
-    'suspended', 'confirm identity', 'prize', 'winner', 'congratulations',
-    'free money', 'cash prize', 'bitcoin', 'cryptocurrency', 'investment opportunity',
-    'nigerian prince', 'inheritance', 'tax refund', 'claim now', 'expire',
-    'password reset', 'account locked', 'unusual activity', 'verify now',
-    'dear customer', 'dear user', 'dear member', 'update payment',
-    'credit card', 'social security', 'bank account', 'wire transfer'
+    // Removed AI-agent false positives: 'verify account', 'confirm identity',
+    // 'unusual activity', 'password reset', 'account locked', 'suspended',
+    // 'urgent', 'act now', 'credit card' — these appear in every legitimate
+    // AI customer-support / transactional email and generate constant false positives.
+    // Kept: terms that only appear in actual spam / scams.
+    'limited time', 'click here',
+    'prize', 'winner', 'congratulations you have won',
+    'free money', 'cash prize', 'investment opportunity',
+    'nigerian prince', 'inheritance', 'wire transfer',
+    'tax refund', 'claim now',
+    'dear customer', 'dear user', 'dear member',
+    'social security', 'bank account',
+    'lottery', 'you have been selected',
   ];
 
   private suspiciousPatterns = [

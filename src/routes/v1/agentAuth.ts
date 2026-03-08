@@ -5,8 +5,8 @@ import logger from '../../utils/logger';
 
 const router = Router();
 
-// 5 registrations per IP per day — each requires a unique keypair + signs a challenge,
-// making mass registration expensive. Legitimate agents need very few registrations.
+// 5 registrations per IP per day — each requires a unique keypair + completing a
+// contextual reasoning challenge, making mass registration expensive for scripts.
 const registerRateLimit = rateLimit({
   windowMs: 24 * 60 * 60 * 1000,
   max: 5,
@@ -27,26 +27,47 @@ const verifyRateLimit = rateLimit({
 /**
  * POST /v1/auth/agent-register
  *
- * Agent sends public key + org details.
- * Returns agentSignupToken + a challenge the agent must sign with their private key.
- * No email required. No human verifier.
+ * Agent sends its public key, a description of its purpose, and org details.
+ * Returns agentSignupToken + a contextual natural-language challenge.
+ *
+ * The challenge is NOT an opaque nonce to sign directly. It is a paragraph of
+ * instructions requiring the agent to:
+ *   1. Identify the primary verb of its stated purpose
+ *   2. Count words in its purpose with 5+ alphabetical characters
+ *   3. Include a server-issued epoch marker
+ *   ...and construct a "verb:count:epochMarker" response string to sign.
+ *
+ * This design means a hardcoded script cannot complete registration — it requires
+ * reading comprehension and contextual reasoning about the agent's own purpose.
  *
  * Body:
- *   agentName:  string — display name for this agent
- *   orgName:    string — organization name
- *   orgSlug:    string — organization URL slug (unique, becomes inbox localPart)
- *   publicKey:  string — base64-encoded raw 32-byte Ed25519 public key
- *
- * Anti-spam: each public key can only register once; rate limited 5/IP/day;
- * verification requires signing the challenge with the matching private key.
+ *   agentName:    string — display name for this agent
+ *   agentPurpose: string — 1–3 sentences describing what the agent does (20–2000 chars)
+ *   orgName:      string — organization name
+ *   orgSlug:      string — unique slug (becomes inbox localPart: slug@commune.email)
+ *   publicKey:    string — base64-encoded raw 32-byte Ed25519 public key
  */
 router.post('/agent-register', registerRateLimit, async (req: Request, res: Response) => {
-  const { agentName, orgName, orgSlug, publicKey } = req.body;
+  const { agentName, agentPurpose, orgName, orgSlug, publicKey } = req.body;
 
-  if (!agentName || !orgName || !orgSlug || !publicKey) {
+  if (!agentName || !agentPurpose || !orgName || !orgSlug || !publicKey) {
     return res.status(400).json({
       error: 'missing_fields',
-      message: 'Required: agentName, orgName, orgSlug, publicKey',
+      message: 'Required: agentName, agentPurpose, orgName, orgSlug, publicKey',
+    });
+  }
+
+  // agentPurpose: 20–2000 characters, at least 3 words
+  if (typeof agentPurpose !== 'string' || agentPurpose.trim().length < 20 || agentPurpose.trim().length > 2000) {
+    return res.status(400).json({
+      error: 'invalid_agent_purpose',
+      message: 'agentPurpose must be between 20 and 2000 characters describing what your agent does',
+    });
+  }
+  if (agentPurpose.trim().split(/\s+/).length < 3) {
+    return res.status(400).json({
+      error: 'invalid_agent_purpose',
+      message: 'agentPurpose must contain at least 3 words',
     });
   }
 
@@ -68,6 +89,7 @@ router.post('/agent-register', registerRateLimit, async (req: Request, res: Resp
   try {
     const result = await AgentIdentityService.registerAgent({
       agentName: agentName.trim(),
+      agentPurpose: agentPurpose.trim(),
       orgName: orgName.trim(),
       orgSlug: orgSlug.trim().toLowerCase(),
       publicKey,
@@ -76,7 +98,12 @@ router.post('/agent-register', registerRateLimit, async (req: Request, res: Resp
     return res.status(201).json({
       agentSignupToken: result.agentSignupToken,
       challenge: result.challenge,
-      message: 'Sign the challenge with your private key and submit to POST /v1/auth/agent-verify.',
+      instructions: [
+        'Read the challenge.text carefully — it contains tasks you must complete.',
+        'Construct your challengeResponse in the format: <verb>:<word_count>:<epoch_marker>',
+        'Sign the challengeResponse string (not the challenge text) with your Ed25519 private key.',
+        'Submit both to POST /v1/auth/agent-verify.',
+      ],
       expiresIn: 900,
     });
   } catch (err: any) {
@@ -94,34 +121,50 @@ router.post('/agent-register', registerRateLimit, async (req: Request, res: Resp
 /**
  * POST /v1/auth/agent-verify
  *
- * Agent signs the challenge from /agent-register with their private key and submits it.
- * Server verifies the signature against the stored public key.
- * On success: activates account, auto-provisions inbox at orgSlug@commune.email, returns agentId.
+ * Agent submits the challengeResponse it constructed from the challenge text,
+ * plus an Ed25519 signature of that challengeResponse string.
+ *
+ * Server validates:
+ *   1. challengeResponse format: "verb:count:epochMarker"
+ *   2. word count matches the pre-computed count for the agent's stated purpose
+ *   3. epoch marker matches what was issued
+ *   4. signature is a valid Ed25519 sig of challengeResponse (not the challenge text)
+ *
+ * On success: activates account, auto-provisions inbox, returns agentId + inboxEmail.
  *
  * Body:
- *   agentSignupToken: string — from the /agent-register response
- *   signature:        string — base64 Ed25519 signature of the challenge string
+ *   agentSignupToken:  string — from the /agent-register response
+ *   challengeResponse: string — the "verb:count:epochMarker" string you constructed
+ *   signature:         string — base64 Ed25519 signature of challengeResponse
  */
 router.post('/agent-verify', verifyRateLimit, async (req: Request, res: Response) => {
-  const { agentSignupToken, signature } = req.body;
+  const { agentSignupToken, challengeResponse, signature } = req.body;
 
-  if (!agentSignupToken || !signature) {
+  if (!agentSignupToken || !challengeResponse || !signature) {
     return res.status(400).json({
       error: 'missing_fields',
-      message: 'Required: agentSignupToken, signature',
+      message: 'Required: agentSignupToken, challengeResponse, signature',
+    });
+  }
+
+  if (typeof challengeResponse !== 'string') {
+    return res.status(400).json({
+      error: 'invalid_challenge_response',
+      message: 'challengeResponse must be a string in the format: verb:count:epochMarker',
     });
   }
 
   if (typeof signature !== 'string') {
     return res.status(400).json({
       error: 'invalid_signature_format',
-      message: 'signature must be a base64-encoded Ed25519 signature string',
+      message: 'signature must be a base64-encoded Ed25519 signature of your challengeResponse string',
     });
   }
 
   try {
     const result = await AgentIdentityService.verifyAgentChallenge({
       agentSignupToken,
+      challengeResponse,
       signature,
     });
 
@@ -141,6 +184,9 @@ router.post('/agent-verify', verifyRateLimit, async (req: Request, res: Response
   } catch (err: any) {
     if (err.code === 'INVALID_TOKEN') {
       return res.status(401).json({ error: 'invalid_token', message: 'Invalid or expired signup token' });
+    }
+    if (err.code === 'INVALID_CHALLENGE_RESPONSE') {
+      return res.status(400).json({ error: 'invalid_challenge_response', message: err.message });
     }
     if (err.code === 'INVALID_SIGNATURE') {
       return res.status(401).json({ error: 'invalid_signature', message: err.message });

@@ -1,7 +1,7 @@
 import express from 'express';
 import { z } from 'zod';
 import { SearchService } from '../../services/searchService';
-import { SearchFilterSchema } from '../../types/search';
+import { SearchFilterSchema, ConversationMetadata } from '../../types/search';
 import { requireFeature } from '../../middleware/planGate';
 import logger from '../../utils/logger';
 
@@ -61,7 +61,10 @@ router.post('/index', async (req, res) => {
       }),
     }).parse(req.body);
 
-    await searchService.indexConversation(organizationId, conversation);
+    await searchService.indexConversation(organizationId, {
+      ...conversation,
+      metadata: conversation.metadata as unknown as ConversationMetadata,
+    });
     res.json({ data: { success: true } });
   } catch (error) {
     logger.error('Index error:', error);
@@ -94,7 +97,10 @@ router.post('/index/batch', async (req, res) => {
       })),
     }).parse(req.body);
 
-    await searchService.indexConversationsBatch(organizationId, conversations);
+    await searchService.indexConversationsBatch(organizationId, conversations.map(c => ({
+      ...c,
+      metadata: c.metadata as unknown as ConversationMetadata,
+    })));
     res.json({ data: { success: true } });
   } catch (error) {
     logger.error('Batch index error:', error);

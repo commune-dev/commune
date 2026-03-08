@@ -1,4 +1,4 @@
-import { Router, json } from 'express';
+import { Router } from 'express';
 import messageStore from '../../stores/messageStore';
 import { AttachmentStorageService } from '../../services/attachmentStorageService';
 import { requirePermission } from '../../middleware/permissions';
@@ -18,7 +18,7 @@ const router = Router();
  *
  * Returns: { attachment_id, filename, mime_type, size }
  */
-router.post('/upload', json({ limit: '10mb' }), requirePermission('attachments:write'), async (req: any, res) => {
+router.post('/upload', requirePermission('attachments:write'), async (req: any, res) => {
   const orgId = req.orgId;
   const { content, filename, mime_type, mimeType } = req.body || {};
   const mt = mime_type || mimeType;

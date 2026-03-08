@@ -99,6 +99,7 @@ export interface SpamAnalysisResult {
     link_score: number;
     sender_reputation: number;
     domain_reputation: number;
+    verified_sender?: boolean;
   };
   processing_time_ms: number;
 }

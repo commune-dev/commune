@@ -4,6 +4,7 @@ import jwt from 'jsonwebtoken';
 import { getCollection } from '../db';
 import type { User } from '../types';
 import logger from '../utils/logger';
+import { getRedisClient, getSubClient } from '../lib/redis';
 
 const JWT_SECRET = process.env.JWT_SECRET || '';
 const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:3000,http://localhost:3001').split(',').map(s => s.trim());
@@ -20,12 +21,12 @@ const IP_RATE_WINDOW_MS = 60_000;           // 1 minute window
 const IP_RATE_MAX_CONNECTIONS = 10;         // max 10 WS connections per IP per minute
 
 // ─── Types ───────────────────────────────────────────────────
-const ALLOWED_EVENT_TYPES = new Set(['email.received', 'email.sent', 'connection.ack']);
+const ALLOWED_EVENT_TYPES = new Set(['email.received', 'email.sent', 'connection.ack', 'sms.received', 'sms.sent', 'sms.status_updated']);
 const ALLOWED_DIRECTIONS = new Set(['inbound', 'outbound']);
 const MAX_FIELD_LENGTH = 256;
 
 export interface RealtimeEvent {
-  type: 'email.received' | 'email.sent' | 'connection.ack';
+  type: 'email.received' | 'email.sent' | 'connection.ack' | 'sms.received' | 'sms.sent' | 'sms.status_updated';
   inbox_id?: string;
   inbox_address?: string;
   thread_id?: string;
@@ -34,6 +35,10 @@ export interface RealtimeEvent {
   from?: string;
   direction?: 'inbound' | 'outbound';
   created_at?: string;
+  // SMS-specific fields
+  phone_number_id?: string;
+  from_number?: string;
+  to_number?: string;
 }
 
 interface AuthenticatedSocket extends WebSocket {
@@ -211,8 +216,48 @@ function sanitizeEvent(event: RealtimeEvent): RealtimeEvent {
   if (event.from) sanitized.from = truncateField(event.from, MAX_FIELD_LENGTH);
   if (event.direction && ALLOWED_DIRECTIONS.has(event.direction)) sanitized.direction = event.direction;
   if (event.created_at) sanitized.created_at = truncateField(event.created_at, 64);
+  // SMS fields
+  if (event.phone_number_id) sanitized.phone_number_id = truncateField(event.phone_number_id, 64);
+  if (event.from_number) sanitized.from_number = truncateField(event.from_number, 32);
+  if (event.to_number) sanitized.to_number = truncateField(event.to_number, 32);
 
   return sanitized;
+}
+
+// ─── Redis pub/sub for cross-replica WebSocket sync ──────────
+function setupRedisSubscription(): void {
+  const sub = getSubClient();
+  if (!sub) {
+    logger.warn('Redis not available — cross-replica WebSocket sync disabled');
+    return;
+  }
+
+  sub.psubscribe('realtime:org:*', (err) => {
+    if (err) {
+      logger.error('Redis psubscribe failed', { error: err.message });
+    } else {
+      logger.info('Subscribed to Redis realtime channels for cross-replica sync');
+    }
+  });
+
+  sub.on('pmessage', (_pattern: string, _channel: string, message: string) => {
+    try {
+      const { orgId, event, sourceReplicaId } = JSON.parse(message) as {
+        orgId: string;
+        event: RealtimeEvent;
+        sourceReplicaId: string;
+      };
+
+      // Skip events this replica published — already delivered locally in emit()
+      const myReplicaId = process.env.RAILWAY_REPLICA_ID || 'local';
+      if (sourceReplicaId === myReplicaId) return;
+
+      // Deliver to WebSocket clients connected to this replica
+      emitToLocalClients(orgId, event);
+    } catch (err) {
+      logger.warn('Redis pmessage parse error', { error: (err as Error).message });
+    }
+  });
 }
 
 // ─── WebSocket Server Setup ──────────────────────────────────
@@ -227,8 +272,11 @@ function attachToServer(httpServer: HttpServer): WebSocketServer {
   });
 
   httpServer.on('upgrade', async (req, socket, head) => {
-    // Only handle /ws path
+    // Only handle /ws path — let voice bridge handle /ws/voice/* paths
     const pathname = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`).pathname;
+    if (pathname.startsWith('/ws/voice/')) {
+      return;  // Voice bridge handles this — do NOT destroy
+    }
     if (pathname !== '/ws') {
       socket.destroy();
       return;
@@ -358,7 +406,32 @@ function attachToServer(httpServer: HttpServer): WebSocketServer {
   }, REVALIDATION_INTERVAL_MS);
 
   logger.info('WebSocket server attached to /ws path (hardened)');
+
+  // Set up Redis pub/sub for cross-replica event delivery
+  setupRedisSubscription();
+
   return wss;
+}
+
+// ─── Deliver to local WebSocket clients only (no Redis publish) ──
+// Used by the Redis subscriber to forward cross-replica events
+// without re-publishing and creating a loop.
+function emitToLocalClients(orgId: string, event: RealtimeEvent): void {
+  const room = rooms.get(orgId);
+  if (!room || room.size === 0) return;
+
+  const sanitized = sanitizeEvent(event);
+  const payload = JSON.stringify(sanitized);
+
+  for (const ws of room) {
+    safeSend(ws, payload);
+  }
+
+  logger.info('Realtime event delivered from cross-replica pub/sub', {
+    type: sanitized.type,
+    roomSize: room.size,
+    messageId: sanitized.message_id,
+  });
 }
 
 // ─── Emit to all connections in an org ───────────────────────
@@ -379,6 +452,20 @@ function emit(orgId: string, event: RealtimeEvent): void {
     roomSize: room.size,
     messageId: sanitized.message_id,
   });
+
+  // Publish to Redis so other replicas can deliver the event to their local clients.
+  // Fire-and-forget — Redis being down must not break local WebSocket delivery.
+  const pub = getRedisClient();
+  if (pub) {
+    pub.publish(
+      `realtime:org:${orgId}`,
+      JSON.stringify({
+        orgId,
+        event: sanitized,
+        sourceReplicaId: process.env.RAILWAY_REPLICA_ID || 'local',
+      })
+    ).catch((err) => logger.warn('Redis realtime publish failed', { error: (err as Error).message }));
+  }
 }
 
 function safeSend(ws: WebSocket, data: any): void {

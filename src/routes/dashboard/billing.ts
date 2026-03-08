@@ -4,6 +4,8 @@ import type { CommunePlan, BillingCycle } from '../../lib/stripe';
 import { connect } from '../../db';
 import { getOrgTierLimits } from '../../config/rateLimits';
 import type { TierType } from '../../config/rateLimits';
+import { CREDIT_BUNDLES } from '../../config/smsCosts';
+import { creditStore } from '../../stores/creditStore';
 import logger from '../../utils/logger';
 
 const router = Router();
@@ -186,6 +188,83 @@ router.post('/billing/cancel-subscription', async (req: Request, res: Response) 
   } catch (error: any) {
     logger.error('Error cancelling subscription', { error: error.message });
     res.status(500).json({ error: error.message || 'Failed to cancel subscription' });
+  }
+});
+
+// ─── Credit bundles ──────────────────────────────────────────────
+
+router.get('/billing/credit-bundles', async (_req: Request, res: Response) => {
+  const bundles = Object.entries(CREDIT_BUNDLES).map(([id, b]) => ({
+    id,
+    credits: b.credits,
+    price: b.price,
+    pricePerCredit: (b.price / b.credits).toFixed(4),
+    available: !!b.stripePriceId,
+  }));
+  res.json({ data: bundles });
+});
+
+router.get('/billing/credit-balance', async (req: Request, res: Response) => {
+  try {
+    const orgId = (req as any).orgId;
+    if (!orgId) return res.status(401).json({ error: 'Not authenticated' });
+    const balance = await creditStore.getBalance(orgId);
+    res.json({ data: balance });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/billing/create-credits-checkout', async (req: Request, res: Response) => {
+  try {
+    const stripe = getStripe();
+    if (!stripe) return res.status(500).json({ error: 'Stripe not configured' });
+
+    const orgId = (req as any).orgId;
+    if (!orgId) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { bundle, returnUrl } = req.body;
+    if (!bundle || !CREDIT_BUNDLES[bundle]) {
+      return res.status(400).json({ error: 'Invalid bundle. Choose: starter, growth, scale' });
+    }
+
+    const bundleConfig = CREDIT_BUNDLES[bundle];
+    if (!bundleConfig.stripePriceId) {
+      return res.status(500).json({ error: `Stripe price not configured for bundle: ${bundle}` });
+    }
+
+    const db = await connect();
+    if (!db) return res.status(500).json({ error: 'Database unavailable' });
+    const org = await db.collection('organizations').findOne({ id: orgId });
+
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3001';
+    const baseReturnUrl = returnUrl || `${frontendUrl}/dashboard/billing`;
+
+    const sessionParams: any = {
+      payment_method_types: ['card'],
+      line_items: [{ price: bundleConfig.stripePriceId, quantity: 1 }],
+      mode: 'payment',
+      success_url: `${baseReturnUrl}?credits_purchased=true&bundle=${bundle}`,
+      cancel_url: `${baseReturnUrl}?payment=cancelled`,
+      allow_promotion_codes: true,
+      metadata: {
+        orgId,
+        purchase_type: 'credits',
+        credits: String(bundleConfig.credits),
+        bundle,
+      },
+    };
+
+    if (org?.stripe_customer_id) {
+      sessionParams.customer = org.stripe_customer_id;
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionParams);
+    logger.info('Credits checkout session created', { orgId, bundle, credits: bundleConfig.credits });
+    res.json({ sessionId: session.id, url: session.url, credits: bundleConfig.credits });
+  } catch (error: any) {
+    logger.error('Error creating credits checkout session', { error: error.message });
+    res.status(500).json({ error: error.message || 'Failed to create checkout session' });
   }
 });
 

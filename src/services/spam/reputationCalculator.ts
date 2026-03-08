@@ -22,11 +22,16 @@ export class ReputationCalculator {
     const contentScore = sender.metadata.avg_content_score;
 
     // Weighted calculation
+    // Content score weight intentionally kept low (0.05) to avoid the "reputation trap"
+    // where AI agents that send high volumes of templated email accumulate worse content
+    // averages over time even when recipients never complain or bounce.
+    // Behavioral signals (spam reports, bounces, complaints) are reliable ground truth;
+    // content score alone is not.
     let score = (
-      spamRate * 0.4 +
-      bounceRate * 0.2 +
+      spamRate * 0.5 +
+      bounceRate * 0.25 +
       complaintRate * 0.2 +
-      contentScore * 0.2
+      contentScore * 0.05
     );
 
     // Apply time decay (scores improve over time if no spam)

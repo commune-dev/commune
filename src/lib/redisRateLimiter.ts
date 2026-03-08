@@ -381,11 +381,82 @@ export const authPasswordResetRateLimiter = createRateLimiter({
   keyGenerator: getClientIp,
 });
 
-// IP-based webhook rate limiter — protects against DDoS on the webhook endpoint
-export const webhookRateLimiter = createRateLimiter({
-  windowMs: 60 * 1000,      // 1 minute
-  getMax: async () => 300,   // 300 req/min per IP — generous for legitimate Resend traffic
-  keyPrefix: 'webhook:ip',
+// ─── Webhook rate limiters ──────────────────────────────────────────────────
+// Two-tier approach: requests carrying Svix headers (from Resend/Svix) get a
+// very generous limit. Requests without Svix headers (potential attackers
+// probing the endpoint) get a strict IP-based limit.
+
+// Generous limiter for verified Svix traffic — 100k req/min, effectively
+// uncapped for realistic Resend volumes (worst case ~1500 req/min at 25 eps)
+const webhookLimiterSvix = createRateLimiter({
+  windowMs: 60 * 1000,
+  getMax: async () => 100_000, // effectively uncapped for legitimate Resend traffic
+  keyPrefix: 'webhook:svix',
+  errorMessage: 'Webhook rate limit exceeded',
+  keyGenerator: getClientIp,
+});
+
+// Strict limiter for requests with no Svix headers (no proof of Resend origin)
+const webhookLimiterStrict = createRateLimiter({
+  windowMs: 60 * 1000,
+  getMax: async () => 60, // 60 req/min per IP for unverified sources
+  keyPrefix: 'webhook:strict',
   errorMessage: 'Webhook rate limit exceeded — try again shortly',
   keyGenerator: getClientIp,
+});
+
+/**
+ * webhookRateGuard: two-tier rate limiter for the Resend inbound webhook.
+ *
+ * Checks for Svix signature headers BEFORE rate-limiting. A request that
+ * carries all three Svix headers (svix-id, svix-timestamp, svix-signature)
+ * is almost certainly from Resend — route it through the generous limiter so
+ * high-volume inbound traffic is never blocked. Requests missing those headers
+ * (probes, scanners) hit the strict limit.
+ *
+ * Full signature verification happens inside the route handler (requires raw
+ * body). The presence of all three headers is sufficient here to distinguish
+ * legitimate Svix traffic from blind attackers.
+ */
+export const webhookRateGuard = (
+  req: OrgRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const svixId = req.headers['svix-id'];
+  const svixTimestamp = req.headers['svix-timestamp'];
+  const svixSignature = req.headers['svix-signature'];
+
+  if (svixId && svixTimestamp && svixSignature) {
+    // All three Svix headers present — route through generous limiter
+    return webhookLimiterSvix(req, res, next) as Promise<void>;
+  }
+
+  // No Svix headers — apply strict limit
+  return webhookLimiterStrict(req, res, next) as Promise<void>;
+};
+
+/** @deprecated Use webhookRateGuard instead */
+export const webhookRateLimiter = webhookRateGuard;
+
+// ─── SMS rate limiters ───────────────────────────────────────────────────────
+
+/** 1 SMS/sec per destination number (Twilio Messaging Service hard limit) */
+export const smsPerNumberRateLimiter = createRateLimiter({
+  windowMs: 1000,
+  getMax: async () => 1,
+  keyPrefix: 'sms:number:sec',
+  errorMessage: 'SMS rate limit: maximum 1 message per second per destination number',
+  keyGenerator: (req) => `${getOrgId(req)}:${req.body?.to ?? 'unknown'}`,
+  headerSuffix: 'SmsNumber',
+});
+
+/** IP-based rate limiter for phone number purchases (anti-abuse) */
+export const phoneNumberPurchaseRateLimiter = createRateLimiter({
+  windowMs: 24 * 60 * 60 * 1000,
+  getMax: async () => 5,
+  keyPrefix: 'phone:purchase:ip',
+  errorMessage: 'Too many phone number purchases from this IP. Try again tomorrow.',
+  keyGenerator: getClientIp,
+  headerSuffix: 'PhonePurchase',
 });
