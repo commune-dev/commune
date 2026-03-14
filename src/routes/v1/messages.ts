@@ -49,18 +49,22 @@ router.post('/send', sendingHealthGate, warmupGate, emailRateLimiter, emailDaily
     }
   }
 
-  // Pre-generate message ID so the 202 response can include it
+  // Pre-generate message ID and thread ID so the 202 response can include them immediately.
+  // The thread_id is stable: if caller provided one we use that, otherwise we generate one here.
   const preGeneratedId = `msg_${crypto.randomUUID().replace(/-/g, '')}`;
+  const preGeneratedThreadId = payload.thread_id || `thread_${crypto.randomUUID()}`;
 
   // Enqueue via BullMQ and return 202 immediately — no blocking wait.
   const queue = getOutboundEmailQueue();
 
   if (queue) {
     try {
-      const job = await queue.add('send', { payload: { ...payload, orgId, _messageId: preGeneratedId } });
+      const job = await queue.add('send', {
+        payload: { ...payload, orgId, _messageId: preGeneratedId, thread_id: preGeneratedThreadId },
+      });
       logger.info('v1: Email queued', { orgId, jobId: job.id, to: payload.to, messageId: preGeneratedId });
 
-      const responseBody = { data: { id: preGeneratedId, status: 'queued' } };
+      const responseBody = { data: { id: preGeneratedId, thread_id: preGeneratedThreadId, status: 'queued' } };
 
       if (idempotencyKey && orgId) {
         await storeIdempotencyResult(orgId, idempotencyKey, 202, responseBody);
