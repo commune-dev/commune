@@ -246,31 +246,29 @@ const sendEmail = async (payload: SendMessagePayload & { orgId?: string }) => {
     }
   }
 
-  // Process attachments - fetch from database and convert to SES format
+  // Process attachments - fetch from database and convert to SES format (in parallel)
   let sesAttachments: Array<{ filename: string; content: Buffer; contentType: string }> = [];
   if (payload.attachments && Array.isArray(payload.attachments) && payload.attachments.length > 0) {
-    for (const attachmentId of payload.attachments) {
-      try {
-        const attachment = await messageStore.getAttachment(attachmentId);
-        if (attachment) {
-          let buf: Buffer | null = null;
-          if (attachment.storage_type === 'cloudinary' && attachment.cloudinary_url) {
-            // Fetch from Cloudinary URL (SES doesn't accept URLs, needs raw bytes)
-            const res = await fetch(attachment.cloudinary_url);
-            if (res.ok) buf = Buffer.from(await res.arrayBuffer());
-          } else if (attachment.content_base64) {
-            buf = Buffer.from(attachment.content_base64, 'base64');
-          }
-          if (buf) {
-            sesAttachments.push({
-              filename: attachment.filename,
-              content: buf,
-              contentType: attachment.mime_type || 'application/octet-stream',
-            });
-          }
-        }
-      } catch (err) {
-        logger.error('Failed to fetch attachment', { attachmentId, error: err });
+    const fetchOne = async (attachmentId: string) => {
+      const attachment = await messageStore.getAttachment(attachmentId);
+      if (!attachment) return null;
+      let buf: Buffer | null = null;
+      if (attachment.storage_type === 'cloudinary' && attachment.cloudinary_url) {
+        // Fetch from Cloudinary URL (SES doesn't accept URLs, needs raw bytes)
+        const fetchRes = await fetch(attachment.cloudinary_url);
+        if (fetchRes.ok) buf = Buffer.from(await fetchRes.arrayBuffer());
+      } else if (attachment.content_base64) {
+        buf = Buffer.from(attachment.content_base64, 'base64');
+      }
+      if (!buf) return null;
+      return { filename: attachment.filename, content: buf, contentType: attachment.mime_type || 'application/octet-stream' };
+    };
+    const results = await Promise.allSettled(payload.attachments.map(fetchOne));
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value) {
+        sesAttachments.push(r.value);
+      } else if (r.status === 'rejected') {
+        logger.error('Failed to fetch attachment', { error: r.reason });
       }
     }
   }

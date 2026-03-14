@@ -133,10 +133,15 @@ async function buildSmsGraph(
   const phoneNumbersCol = await getCollection('phone_numbers');
   if (!messagesCol || !phoneNumbersCol) return { messageCount: 0 };
 
-  // 1. Fetch org's phone number documents → phone_number nodes
-  const phoneNumberDocs = await phoneNumbersCol
-    .find({ orgId, id: { $in: phoneNumberIds } })
-    .toArray() as Array<Record<string, unknown>>;
+  // 1+2. Fetch phone number docs and SMS messages in parallel (independent queries)
+  const [phoneNumberDocs, rawSmsMessages] = await Promise.all([
+    phoneNumbersCol.find({ orgId, id: { $in: phoneNumberIds } }).toArray() as Promise<Array<Record<string, unknown>>>,
+    messagesCol
+      .find({ orgId, channel: 'sms', 'metadata.phone_number_id': { $in: phoneNumberIds } })
+      .sort({ created_at: 1 })
+      .limit(1000)
+      .toArray() as Promise<Array<Record<string, unknown>>>,
+  ]);
 
   for (const pn of phoneNumberDocs) {
     addNode({
@@ -149,17 +154,6 @@ async function buildSmsGraph(
       lastActive: undefined,
     });
   }
-
-  // 2. Fetch SMS messages for these phone numbers
-  const rawSmsMessages = await messagesCol
-    .find({
-      orgId,
-      channel: 'sms',
-      'metadata.phone_number_id': { $in: phoneNumberIds },
-    })
-    .sort({ created_at: 1 })
-    .limit(1000)
-    .toArray() as Array<Record<string, unknown>>;
 
   if (rawSmsMessages.length === 0) return { messageCount: 0 };
 

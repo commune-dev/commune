@@ -147,6 +147,7 @@ router.get('/', requirePermission('messages:read'), async (req: any, res) => {
       });
     }
 
+    res.set('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
     return res.json({ data });
   } catch (err) {
     logger.error('v1: Failed to list messages', { orgId, error: err });

@@ -128,26 +128,30 @@ router.get('/', requirePermission('inboxes:read'), async (req: any, res) => {
   const orgId = req.orgId;
 
   try {
-    const domains = await domainStore.listDomains(orgId);
-    // Also check the default domain for this org's inboxes
-    const defaultInboxes = await domainStore.listInboxes(DEFAULT_DOMAIN_ID, orgId);
+    const [domains, defaultInboxes] = await Promise.all([
+      domainStore.listDomains(orgId),
+      domainStore.listInboxes(DEFAULT_DOMAIN_ID, orgId),
+    ]);
 
-    const allInboxes: any[] = [];
-    for (const domain of domains) {
-      const inboxes = await domainStore.listInboxes(domain.id, orgId);
-      for (const inbox of inboxes) {
-        allInboxes.push({ ...inbox, domain_id: domain.id, domain_name: domain.name });
-      }
-    }
+    // Fetch all custom-domain inboxes in parallel
+    const customInboxArrays = await Promise.all(
+      domains.map((domain) =>
+        domainStore
+          .listInboxes(domain.id, orgId)
+          .then((inboxes) => inboxes.map((inbox) => ({ ...inbox, domain_id: domain.id, domain_name: domain.name })))
+      )
+    );
+    const allInboxes: any[] = customInboxArrays.flat();
 
     // Add default domain inboxes if not already included
-    const domainIds = new Set(domains.map(d => d.id));
+    const domainIds = new Set(domains.map((d) => d.id));
     if (!domainIds.has(DEFAULT_DOMAIN_ID)) {
       for (const inbox of defaultInboxes) {
         allInboxes.push({ ...inbox, domain_id: DEFAULT_DOMAIN_ID, domain_name: DEFAULT_DOMAIN_NAME });
       }
     }
 
+    res.set('Cache-Control', 'private, max-age=30, stale-while-revalidate=60');
     return res.json({ data: allInboxes });
   } catch (err) {
     logger.error('v1: Failed to list all inboxes', { orgId, error: err });

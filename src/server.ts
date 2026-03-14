@@ -31,6 +31,7 @@ import { attachApiContext } from './middleware/attachApiContext';
 import { errorHandler } from './middleware/errorHandler';
 import { auditLog } from './middleware/auditLog';
 import { securityHeaders, requestId, extraSecurityHeaders } from './middleware/securityHeaders';
+import { serverTiming } from './middleware/serverTiming';
 import logger from './utils/logger';
 import { getRedisClient, disconnectRedis, disconnectSubClient } from './lib/redis';
 import { disconnectDB } from './db';
@@ -97,6 +98,7 @@ app.use(compression({
 
 // ─── Security Headers & Audit ────────────────────────────────────
 app.use(requestId);
+app.use(serverTiming);
 app.use(securityHeaders);
 app.use(extraSecurityHeaders);
 app.use(auditLog);

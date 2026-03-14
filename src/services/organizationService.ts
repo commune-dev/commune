@@ -2,6 +2,11 @@ import { randomBytes } from 'crypto';
 import type { Organization } from '../types';
 import { getCollection } from '../db';
 
+// 30s TTL org cache — same TTL as tierResolver so tier and org stay in sync
+const orgCache = new Map<string, { org: Organization; expiresAt: number }>();
+const orgInFlight = new Map<string, Promise<Organization | null>>();
+const ORG_CACHE_TTL_MS = 30 * 1000;
+
 export class OrganizationService {
   static async createOrganization(data: {
     name: string;
@@ -36,9 +41,26 @@ export class OrganizationService {
   }
 
   static async getOrganization(id: string): Promise<Organization | null> {
-    const collection = await getCollection<Organization>('organizations');
-    if (!collection) return null;
-    return collection.findOne({ id, status: 'active' });
+    const cached = orgCache.get(id);
+    if (cached && cached.expiresAt > Date.now()) return cached.org;
+
+    const existing = orgInFlight.get(id);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      const collection = await getCollection<Organization>('organizations');
+      if (!collection) return null;
+      const org = await collection.findOne({ id, status: 'active' });
+      if (org) orgCache.set(id, { org, expiresAt: Date.now() + ORG_CACHE_TTL_MS });
+      return org;
+    })();
+
+    orgInFlight.set(id, promise);
+    try {
+      return await promise;
+    } finally {
+      orgInFlight.delete(id);
+    }
   }
 
   static async getOrganizationBySlug(slug: string): Promise<Organization | null> {
@@ -62,6 +84,7 @@ export class OrganizationService {
       { returnDocument: 'after' }
     );
 
+    orgCache.delete(id);
     return result;
   }
 
@@ -80,6 +103,7 @@ export class OrganizationService {
       { $set: { status: 'inactive', updatedAt: new Date().toISOString() } }
     );
 
+    orgCache.delete(id);
     return result.modifiedCount > 0;
   }
 }
