@@ -4,6 +4,15 @@ import { stripCRLF } from '../lib/sanitize';
 // Email validation
 const emailSchema = z.string().email('Invalid email address').toLowerCase();
 
+// Email schema that also accepts "Display Name <email@domain.com>" format (for from/cc/bcc/reply_to)
+// Validates the email part but preserves the full "Name <email>" string for SES FromEmailAddress
+const displayEmailSchema = z.string().refine((val) => {
+  const trimmed = val.trim();
+  const match = trimmed.match(/<([^>]+)>/);
+  const emailPart = match ? match[1].trim() : trimmed;
+  return z.string().email().safeParse(emailPart).success;
+}, 'Invalid email address');
+
 // Loose recipient schema — real validation happens in EmailValidationService
 // which gives per-recipient rejection/warnings instead of failing the whole request
 const recipientSchema = z.string().min(1, 'Recipient email is required').max(320);
@@ -13,14 +22,14 @@ export const SendEmailSchema = z.object({
   to: z
     .union([recipientSchema, z.array(recipientSchema).min(1, 'At least one recipient required')])
     .transform((val) => (Array.isArray(val) ? val : [val])),
-  from: emailSchema.optional(),
+  from: displayEmailSchema.optional(),
   subject: z.string().min(1, 'Subject is required').max(500, 'Subject too long').transform(stripCRLF),
   html: z.string().max(10_000_000, 'HTML content too large').optional(),
   text: z.string().max(10_000_000, 'Text content too large').optional(),
-  cc: z.union([emailSchema, z.array(emailSchema)]).optional(),
-  bcc: z.union([emailSchema, z.array(emailSchema)]).optional(),
-  reply_to: emailSchema.optional(),
-  replyTo: emailSchema.optional(),
+  cc: z.union([displayEmailSchema, z.array(displayEmailSchema)]).optional(),
+  bcc: z.union([displayEmailSchema, z.array(displayEmailSchema)]).optional(),
+  reply_to: displayEmailSchema.optional(),
+  replyTo: displayEmailSchema.optional(),
   thread_id: z.string().optional(),
   domainId: z.string().optional(),
   domain_id: z.string().optional(),
