@@ -42,6 +42,7 @@ router.get('/metrics', json(), requirePermission('messages:read'), async (req: a
 
     const metrics = await messageStore.getInboxDeliveryMetrics(inboxId, startDate, endDate, domainId);
 
+    res.set('Cache-Control', 'private, max-age=10, stale-while-revalidate=20');
     return res.json({
       data: {
         inbox_id: inboxId || undefined,
@@ -98,6 +99,7 @@ router.get('/events', json(), requirePermission('messages:read'), async (req: an
       eventType,
       limit,
     });
+    res.set('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
     return res.json({ data: events });
   } catch (err) {
     logger.error('v1: Failed to get delivery events', { inboxId, domainId, messageId, error: err });

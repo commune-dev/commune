@@ -45,6 +45,7 @@ router.get('/', requirePermission('threads:read'), async (req: any, res) => {
       orgId,
     });
 
+    res.set('Cache-Control', 'private, max-age=5, stale-while-revalidate=15');
     return res.json({
       data: result.threads,
       next_cursor: result.next_cursor,

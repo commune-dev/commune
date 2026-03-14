@@ -1,4 +1,5 @@
-import resend from '../resendClient';
+import sesClient from '../sesClient';
+import { SendEmailCommand } from '@aws-sdk/client-sesv2';
 import messageStore from '../../stores/messageStore';
 import suppressionStore from '../../stores/suppressionStore';
 import deliveryEventStore from '../../stores/deliveryEventStore';
@@ -215,12 +216,12 @@ const sendEmail = async (payload: SendMessagePayload & { orgId?: string }) => {
       payload.orgId
     );
     if (latest && latest.metadata) {
-      // RFC 5322: In-Reply-To must reference the Message-ID that the recipient
-      // actually received — which is the Resend-format ID, not our custom one.
-      // For old messages, fall back to whatever message_id we stored.
-      const replyToMsgId = latest.metadata.resend_id
-        ? `<${latest.metadata.resend_id}@resend.dev>`
-        : latest.metadata.message_id;
+      // RFC 5322: In-Reply-To must reference the Message-ID that the recipient actually received.
+      // For SES sends: use custom_message_id (our stable <uuid@domain> ID).
+      // For legacy Resend sends: fall back to resend_id format.
+      const replyToMsgId = latest.metadata.custom_message_id
+        || (latest.metadata.resend_id ? `<${latest.metadata.resend_id}@resend.dev>` : null)
+        || latest.metadata.message_id;
       if (replyToMsgId) {
         // Build References chain from existing references + latest message_id
         const existingRefs = latest.metadata.references || [];
@@ -237,23 +238,26 @@ const sendEmail = async (payload: SendMessagePayload & { orgId?: string }) => {
     }
   }
 
-  // Process attachments - fetch from database and convert to Resend format
-  let resendAttachments: any[] = [];
+  // Process attachments - fetch from database and convert to SES format
+  let sesAttachments: Array<{ filename: string; content: Buffer; contentType: string }> = [];
   if (payload.attachments && Array.isArray(payload.attachments) && payload.attachments.length > 0) {
     for (const attachmentId of payload.attachments) {
       try {
         const attachment = await messageStore.getAttachment(attachmentId);
         if (attachment) {
-          // Use Cloudinary URL if available, otherwise use base64 content
+          let buf: Buffer | null = null;
           if (attachment.storage_type === 'cloudinary' && attachment.cloudinary_url) {
-            resendAttachments.push({
-              path: attachment.cloudinary_url,
-              filename: attachment.filename,
-            });
+            // Fetch from Cloudinary URL (SES doesn't accept URLs, needs raw bytes)
+            const res = await fetch(attachment.cloudinary_url);
+            if (res.ok) buf = Buffer.from(await res.arrayBuffer());
           } else if (attachment.content_base64) {
-            resendAttachments.push({
-              content: attachment.content_base64,
+            buf = Buffer.from(attachment.content_base64, 'base64');
+          }
+          if (buf) {
+            sesAttachments.push({
               filename: attachment.filename,
+              content: buf,
+              contentType: attachment.mime_type || 'application/octet-stream',
             });
           }
         }
@@ -280,23 +284,85 @@ const sendEmail = async (payload: SendMessagePayload & { orgId?: string }) => {
     }
   }
 
-  const emailPayload = {
-    from: fromAddress,
-    to: validRecipients.length === recipients.length ? payload.to : validRecipients,
-    subject,
-    html: payload.html,
-    text: payload.text,
-    cc: payload.cc,
-    bcc: payload.bcc,
-    headers,
-    attachments: resendAttachments.length > 0 ? resendAttachments : undefined,
-    reply_to: replyToAddress,
-  } as any;
+  const toRecipients: string[] = validRecipients.length === recipients.length ? (Array.isArray(payload.to) ? payload.to as string[] : [payload.to as string]) : validRecipients;
+  const ccRecipients: string[] | undefined = payload.cc ? (Array.isArray(payload.cc) ? payload.cc as string[] : [payload.cc as string]) : undefined;
+  const bccRecipients: string[] | undefined = payload.bcc ? (Array.isArray(payload.bcc) ? payload.bcc as string[] : [payload.bcc as string]) : undefined;
 
-  const { data, error } = await resend.emails.send(emailPayload);
+  // Build raw MIME message only when attachments are present
+  // For plain text/HTML sends, use the structured SendEmailCommand (simpler + cheaper)
+  let sesData: { MessageId: string };
+  try {
+    if (sesAttachments.length > 0) {
+      // Build raw MIME with attachments
+      const boundary = `boundary_${crypto.randomUUID().replace(/-/g, '')}`;
+      const toHeader = toRecipients.join(', ');
+      const ccHeader = ccRecipients ? `Cc: ${ccRecipients.join(', ')}\r\n` : '';
+      const bccHeader = bccRecipients ? `Bcc: ${bccRecipients.join(', ')}\r\n` : '';
+      const replyToHeader = replyToAddress ? `Reply-To: ${replyToAddress}\r\n` : '';
+      const customHeaders = Object.entries(headers)
+        .filter(([k]) => !['Message-ID','In-Reply-To','References','List-Unsubscribe','List-Unsubscribe-Post'].includes(k))
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('\r\n');
 
-  if (error) {
-    return { error };
+      let rawMsg = `From: ${fromAddress}\r\nTo: ${toHeader}\r\n${ccHeader}${bccHeader}${replyToHeader}`;
+      rawMsg += `Message-ID: ${outboundMessageId}\r\n`;
+      if (headers['In-Reply-To']) rawMsg += `In-Reply-To: ${headers['In-Reply-To']}\r\n`;
+      if (headers['References']) rawMsg += `References: ${headers['References']}\r\n`;
+      if (headers['List-Unsubscribe']) rawMsg += `List-Unsubscribe: ${headers['List-Unsubscribe']}\r\nList-Unsubscribe-Post: ${headers['List-Unsubscribe-Post']}\r\n`;
+      if (customHeaders) rawMsg += `${customHeaders}\r\n`;
+      rawMsg += `Subject: ${subject}\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n`;
+      rawMsg += `--${boundary}\r\nContent-Type: multipart/alternative; boundary="alt_${boundary}"\r\n\r\n`;
+      if (payload.text) rawMsg += `--alt_${boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n${payload.text}\r\n\r\n`;
+      if (payload.html) rawMsg += `--alt_${boundary}\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n${payload.html}\r\n\r\n`;
+      rawMsg += `--alt_${boundary}--\r\n`;
+      for (const att of sesAttachments) {
+        const b64 = att.content.toString('base64');
+        rawMsg += `--${boundary}\r\nContent-Type: ${att.contentType}; name="${att.filename}"\r\nContent-Disposition: attachment; filename="${att.filename}"\r\nContent-Transfer-Encoding: base64\r\n\r\n${b64}\r\n`;
+      }
+      rawMsg += `--${boundary}--\r\n`;
+
+      // SESv2 SendEmailCommand with Content.Raw for attachments
+      const res = await sesClient.send(new SendEmailCommand({
+        Content: { Raw: { Data: Buffer.from(rawMsg) } },
+        ConfigurationSetName: 'commune-sending',
+        EmailTags: [
+          { Name: 'orgId', Value: payload.orgId || 'unknown' },
+          { Name: 'inboxId', Value: payload.inboxId || 'none' },
+        ],
+      }));
+      sesData = { MessageId: res.MessageId! };
+    } else {
+      const res = await sesClient.send(new SendEmailCommand({
+        FromEmailAddress: fromAddress,
+        Destination: {
+          ToAddresses: toRecipients,
+          CcAddresses: ccRecipients,
+          BccAddresses: bccRecipients,
+        },
+        ReplyToAddresses: replyToAddress
+          ? (Array.isArray(replyToAddress) ? replyToAddress as string[] : [replyToAddress as string])
+          : undefined,
+        Content: {
+          Simple: {
+            Subject: { Data: subject, Charset: 'UTF-8' },
+            Body: {
+              ...(payload.text && { Text: { Data: payload.text, Charset: 'UTF-8' } }),
+              ...(payload.html && { Html: { Data: payload.html, Charset: 'UTF-8' } }),
+            },
+            Headers: Object.entries(headers).map(([Name, Value]) => ({ Name, Value: String(Value) })),
+          },
+        },
+        ConfigurationSetName: 'commune-sending',
+        EmailTags: [
+          { Name: 'orgId', Value: payload.orgId || 'unknown' },
+          { Name: 'inboxId', Value: payload.inboxId || 'none' },
+        ],
+      }));
+      sesData = { MessageId: res.MessageId! };
+    }
+  } catch (sesError: any) {
+    logger.error('SES send failed', { error: sesError?.message });
+    return { error: { message: sesError?.message || 'SES send failed', name: sesError?.name } };
   }
 
   // Record successful send for circuit breaker health tracking
@@ -310,17 +376,12 @@ const sendEmail = async (payload: SendMessagePayload & { orgId?: string }) => {
 
   const threadId = payload.thread_id || generatedThreadId;
   const createdAt = new Date().toISOString();
-
-  // Build the Resend-format Message-ID that recipients actually see in their email client.
-  // When a recipient replies, their client puts THIS ID in In-Reply-To — not our custom one.
-  // Resend uses the format: <resend-api-id@resend.dev>
-  const resendId = (data as any).id;
-  const resendMessageId = `<${resendId}@resend.dev>`;
+  const sesMessageId = sesData.MessageId;
 
   const sentMessage = {
     orgId: payload.orgId,
     channel: 'email' as const,
-    message_id: resendId,
+    message_id: sesMessageId,
     thread_id: threadId,
     direction: 'outbound' as const,
     participants: [
@@ -336,14 +397,10 @@ const sendEmail = async (payload: SendMessagePayload & { orgId?: string }) => {
     metadata: {
       created_at: createdAt,
       subject,
-      // RFC 5322 threading: store ALL Message-ID variants so inbound replies can match.
-      // - message_id: the Resend-format ID that recipients actually see (<id@resend.dev>)
-      // - custom_message_id: our custom ID (<uuid@domain>) for internal reference
-      // - resend_id: the plain Resend API response ID (no angle brackets)
-      // - commune_message_id: pre-generated stable ID returned in 202 responses
-      message_id: resendMessageId,
+      // RFC 5322 threading — SES returns a MessageId used in Message-ID header as <id@email.amazonaws.com>
+      message_id: outboundMessageId,
       custom_message_id: outboundMessageId,
-      resend_id: resendId,
+      ses_message_id: sesMessageId,
       commune_message_id: payload._messageId || null,
       in_reply_to: headers['In-Reply-To'] || null,
       references: headers.References ? String(headers.References).split(' ') : [],
@@ -375,7 +432,7 @@ const sendEmail = async (payload: SendMessagePayload & { orgId?: string }) => {
   // here would create a duplicate event that inflates the sent count.
 
   return {
-    data: { ...(data as any), thread_id: threadId, smtp_message_id: resendMessageId },
+    data: { id: sesMessageId, thread_id: threadId, smtp_message_id: outboundMessageId },
     validation,
   };
 };

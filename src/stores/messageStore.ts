@@ -17,6 +17,7 @@ const ensureIndexes = async () => {
     await messages.createIndex({ orgId: 1, created_at: -1 });
     await messages.createIndex({ 'metadata.message_id': 1 }); // For thread resolution by SMTP Message-ID
     await messages.createIndex({ 'metadata.resend_id': 1 });  // For thread resolution by Resend API ID
+    await messages.createIndex({ 'metadata.ses_message_id': 1 }); // For SES delivery event lookup
     await messages.createIndex({ 'metadata.routing_token': 1 }); // For routing token DB fallback
     // Index for listThreads grouping/sorting on the pre-computed effective_thread_id field
     await messages.createIndex({ orgId: 1, effective_thread_id: 1, created_at: -1 });
@@ -582,7 +583,7 @@ const NEGATIVE_TERMINAL_STATUSES = ['bounced', 'failed', 'complained', 'suppress
 
 const updateDeliveryStatus = async (
   messageId: string,
-  status: 'sent' | 'delivered' | 'bounced' | 'failed' | 'complained' | 'suppressed',
+  status: 'sent' | 'delivered' | 'bounced' | 'failed' | 'complained' | 'suppressed' | 'opened',
   data?: any,
   inboxId?: string
 ) => {
@@ -631,12 +632,13 @@ const getMessageByResendId = async (messageId: string) => {
   if (!messages) {
     return null;
   }
-  
+
   const result = await messages.find(
     {
       $or: [
         { message_id: messageId },
         { 'metadata.resend_id': messageId },
+        { 'metadata.ses_message_id': messageId },
       ],
     }
   ).sort({ created_at: -1 }).limit(1).next();

@@ -20,6 +20,7 @@ import callsRoutes from './calls';
 import voiceAgentRoutes from './voiceAgents';
 import eventsRouter from './events';
 import meRoutes from './me';
+import feedbackRoutes from './feedback';
 
 const router = Router();
 
@@ -63,5 +64,6 @@ router.use('/calls', callsRoutes);
 router.use('/phone-numbers', voiceAgentRoutes);
 router.use('/events', eventsRouter);
 router.use('/me', meRoutes);
+router.use('/feedback', feedbackRoutes);
 
 export default router;

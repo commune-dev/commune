@@ -21,6 +21,7 @@ import phoneNumberRoutes from './routes/v1/phoneNumbers';
 import smsRoutes from './routes/v1/sms';
 import stripeWebhookRoutes from './routes/webhooks/stripe';
 import twilioWebhookRoutes from './routes/webhooks/twilio';
+import sesWebhookRoutes from './routes/webhooks/ses';
 import v1Routes from './routes/v1/index';
 import unsubscribeRoutes from './routes/v1/unsubscribe';
 import startup from './startup';
@@ -42,6 +43,7 @@ import { attachVoiceWS, activeCalls } from './services/voice/voiceBridgeService'
 import * as callStore from './stores/callStore';
 import { runAllIndexCreation } from './boot/ensureIndexes';
 import { startInboundEmailWorker } from './workers/inboundEmailWorker';
+import { startInboundPoller, stopInboundPoller } from './services/email/sesInboundProcessor';
 import { startWebhookFanoutWorker } from './workers/webhookFanoutWorker';
 import { startOutboundEmailWorker, closeOutboundEmailConnections } from './workers/outboundEmailWorker';
 import { connect } from './db';
@@ -106,6 +108,7 @@ app.use('/unsubscribe', unsubscribeRoutes);
 
 // Webhook routes mounted BEFORE JSON parser to preserve raw body for signature verification
 app.use('/api/webhooks/resend', webhookRoutes);
+app.use('/api/webhooks/ses', sesWebhookRoutes);
 app.use('/api/webhooks', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
 
 // Twilio webhooks: urlencoded body (NOT JSON) — must be before express.json()
@@ -210,6 +213,10 @@ const httpServer = app.listen(PORT, () => {
   workerRefs.fanout = startWebhookFanoutWorker();
   workerRefs.outbound = startOutboundEmailWorker();
 
+  // Start SES inbound email poller (SQS long-poll — replaces Resend inbound webhook)
+  startInboundPoller();
+  logger.info('SES inbound SQS poller started');
+
   // Pre-warm MongoDB connection pool
   connect().then(async (db) => {
     if (db) {
@@ -246,7 +253,8 @@ const shutdown = async (signal: string) => {
   httpServer.close(async () => {
     logger.info('HTTP server closed — draining connections');
     try {
-      // Close BullMQ workers first so in-flight jobs complete before Redis disconnects
+      // Stop SES inbound poller and BullMQ workers before Redis disconnects
+      stopInboundPoller();
       await Promise.allSettled([
         workerRefs.inbound?.close(),
         workerRefs.fanout?.close(),

@@ -157,3 +157,16 @@ export const inboxLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+// Feedback submission limiter — 10 per minute per org
+export const feedbackLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  keyGenerator: (req: any) => `${orgKeyGenerator(req as OrgRequest)}:feedback`,
+  handler: (_req: any, res: Response) => {
+    res.status(429).json({ error: 'Feedback rate limit exceeded. Try again in a minute.' });
+  },
+  store: createRedisStore('feedback-min'),
+  standardHeaders: true,
+  legacyHeaders: false,
+});

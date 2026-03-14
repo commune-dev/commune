@@ -38,7 +38,7 @@ export interface SecurityStateEntry {
 export interface DeliveryEvent {
   _id: string;
   message_id: string;
-  event_type: 'sent' | 'delivered' | 'bounced' | 'complained' | 'failed' | 'delivery_delayed' | 'suppressed';
+  event_type: 'sent' | 'delivered' | 'bounced' | 'complained' | 'failed' | 'delivery_delayed' | 'suppressed' | 'opened' | 'clicked';
   event_data: any & {
     orphan?: boolean;
     orphan_reason?: 'message_not_found' | 'missing_email_id' | string;
