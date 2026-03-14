@@ -135,6 +135,11 @@ export interface AgentIdentity {
   createdAt: string;
   lastUsedAt?: string;
   revokedAt?: string;
+  // Optional profile fields — supplied at registration, passed to OAuth integrators via agentinfo
+  avatarUrl?: string;      // URL to agent's profile image
+  websiteUrl?: string;     // agent's website or project page
+  moltbookHandle?: string; // Moltbook social handle — if present, moltbook_connected = true
+  capabilities?: string[]; // what the agent can do, e.g. ["send_email", "parse_invoices"]
 }
 
 export interface AgentSignup {
@@ -153,6 +158,11 @@ export interface AgentSignup {
   // Set atomically during registerAgent so verifyAgentChallenge never needs a second DB fetch
   userId: string;
   orgId: string;
+  // Optional profile fields — carried through from registration to the permanent identity
+  avatarUrl?: string;
+  websiteUrl?: string;
+  moltbookHandle?: string;
+  capabilities?: string[];
 }
 
 export interface AgentSignatureNonce {

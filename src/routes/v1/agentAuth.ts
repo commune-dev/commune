@@ -41,14 +41,20 @@ const verifyRateLimit = rateLimit({
  * reading comprehension and contextual reasoning about the agent's own purpose.
  *
  * Body:
- *   agentName:    string — display name for this agent
- *   agentPurpose: string — 1–3 sentences describing what the agent does (20–2000 chars)
- *   orgName:      string — organization name
- *   orgSlug:      string — unique slug (becomes inbox localPart: slug@commune.email)
- *   publicKey:    string — base64-encoded raw 32-byte Ed25519 public key
+ *   agentName:    string   — display name for this agent (required)
+ *   agentPurpose: string   — 1–3 sentences describing what the agent does (20–2000 chars) (required)
+ *   orgName:      string   — organization name (required)
+ *   orgSlug:      string   — unique slug (becomes inbox localPart: slug@commune.email) (required)
+ *   publicKey:    string   — base64-encoded raw 32-byte Ed25519 public key (required)
+ *
+ * Optional profile fields (surfaced to OAuth integrators via GET /oauth/agentinfo):
+ *   avatarUrl:       string   — URL to agent's profile image
+ *   websiteUrl:      string   — agent's website or project page
+ *   moltbookHandle:  string   — Moltbook social handle (enables moltbook_connected=true in agentinfo)
+ *   capabilities:    string[] — what the agent can do, e.g. ["parse_invoices", "send_email"]
  */
 router.post('/agent-register', registerRateLimit, async (req: Request, res: Response) => {
-  const { agentName, agentPurpose, orgName, orgSlug, publicKey } = req.body;
+  const { agentName, agentPurpose, orgName, orgSlug, publicKey, avatarUrl, websiteUrl, moltbookHandle, capabilities } = req.body;
 
   if (!agentName || !agentPurpose || !orgName || !orgSlug || !publicKey) {
     return res.status(400).json({
@@ -86,6 +92,29 @@ router.post('/agent-register', registerRateLimit, async (req: Request, res: Resp
     });
   }
 
+  // Validate optional profile fields
+  if (avatarUrl !== undefined) {
+    try { new URL(avatarUrl); } catch {
+      return res.status(400).json({ error: 'invalid_avatar_url', message: 'avatarUrl must be a valid URL' });
+    }
+  }
+  if (websiteUrl !== undefined) {
+    try { new URL(websiteUrl); } catch {
+      return res.status(400).json({ error: 'invalid_website_url', message: 'websiteUrl must be a valid URL' });
+    }
+  }
+  if (moltbookHandle !== undefined && (typeof moltbookHandle !== 'string' || !/^[a-zA-Z0-9_]{1,50}$/.test(moltbookHandle))) {
+    return res.status(400).json({ error: 'invalid_moltbook_handle', message: 'moltbookHandle must be 1–50 alphanumeric/underscore characters' });
+  }
+  if (capabilities !== undefined) {
+    if (!Array.isArray(capabilities) || capabilities.some(c => typeof c !== 'string' || c.length > 100)) {
+      return res.status(400).json({ error: 'invalid_capabilities', message: 'capabilities must be an array of strings (max 100 chars each)' });
+    }
+    if (capabilities.length > 20) {
+      return res.status(400).json({ error: 'invalid_capabilities', message: 'capabilities may contain at most 20 items' });
+    }
+  }
+
   try {
     const result = await AgentIdentityService.registerAgent({
       agentName: agentName.trim(),
@@ -93,6 +122,10 @@ router.post('/agent-register', registerRateLimit, async (req: Request, res: Resp
       orgName: orgName.trim(),
       orgSlug: orgSlug.trim().toLowerCase(),
       publicKey,
+      avatarUrl: avatarUrl?.trim(),
+      websiteUrl: websiteUrl?.trim(),
+      moltbookHandle: moltbookHandle?.trim(),
+      capabilities,
     });
 
     return res.status(201).json({

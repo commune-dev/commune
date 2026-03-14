@@ -209,8 +209,12 @@ export class AgentIdentityService {
     orgName: string;
     orgSlug: string;
     publicKey: string;  // base64 raw 32-byte Ed25519 PUBLIC key
+    avatarUrl?: string;
+    websiteUrl?: string;
+    moltbookHandle?: string;
+    capabilities?: string[];
   }): Promise<{ agentSignupToken: string; challenge: { text: string; format: string } }> {
-    const { agentName, agentPurpose, orgName, orgSlug, publicKey } = data;
+    const { agentName, agentPurpose, orgName, orgSlug, publicKey, avatarUrl, websiteUrl, moltbookHandle, capabilities } = data;
 
     // Validate public key format before touching the DB
     if (!isValidBase64PublicKey(publicKey)) {
@@ -249,6 +253,10 @@ export class AgentIdentityService {
       challengeParams,
       userId: user.id,
       orgId: org.id,
+      avatarUrl,
+      websiteUrl,
+      moltbookHandle,
+      capabilities,
     });
 
     return {
@@ -309,7 +317,7 @@ export class AgentIdentityService {
       );
     }
 
-    const { userId, orgId, orgSlug, agentName, agentPurpose } = signup;
+    const { userId, orgId, orgSlug, agentName, agentPurpose, avatarUrl, websiteUrl, moltbookHandle, capabilities } = signup;
 
     // Activate user
     const { getCollection } = await import('../db');
@@ -352,6 +360,10 @@ export class AgentIdentityService {
       publicKey: signup.publicKey,
       orgId,
       userId,
+      avatarUrl,
+      websiteUrl,
+      moltbookHandle,
+      capabilities,
     });
 
     // Mark signup as verified (TTL index will auto-delete the record after expiry)

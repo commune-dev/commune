@@ -77,6 +77,11 @@ export interface AgentInfo {
   // Moltbook social profile
   moltbook_connected: boolean;
   moltbook_handle?: string;
+
+  // Optional profile enrichment — provided by the agent at registration
+  avatar_url?: string;
+  website_url?: string;
+  capabilities?: string[];
 }
 
 export interface TokenResponse {
@@ -268,7 +273,11 @@ async function buildAgentInfo(agent: AgentIdentity): Promise<AgentInfo> {
     trust_score: trustScore,
     trust_signals: trustSignals(agentAgeDays, sendCount),
 
-    moltbook_connected: false,
+    moltbook_connected: !!agent.moltbookHandle,
+    ...(agent.moltbookHandle && { moltbook_handle: agent.moltbookHandle }),
+    ...(agent.avatarUrl && { avatar_url: agent.avatarUrl }),
+    ...(agent.websiteUrl && { website_url: agent.websiteUrl }),
+    ...(agent.capabilities?.length && { capabilities: agent.capabilities }),
   };
 }
 
