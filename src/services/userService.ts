@@ -23,21 +23,24 @@ const sendEmail = async (payload: {
   html: string;
   text: string;
 }) => {
-  const resend = await import('./resendClient');
-  const { data, error } = await resend.default.emails.send({
-    from: process.env.DEFAULT_FROM_EMAIL || 'noreply@commune.email',
-    to: payload.to,
-    subject: payload.subject,
-    html: payload.html,
-    text: payload.text,
-  });
+  const { SendEmailCommand } = await import('@aws-sdk/client-sesv2');
+  const sesClient = await import('./sesClient');
+  const res = await sesClient.default.send(new SendEmailCommand({
+    FromEmailAddress: process.env.DEFAULT_FROM_EMAIL || 'noreply@commune.email',
+    Destination: { ToAddresses: [payload.to] },
+    Content: {
+      Simple: {
+        Subject: { Data: payload.subject, Charset: 'UTF-8' },
+        Body: {
+          Html: { Data: payload.html, Charset: 'UTF-8' },
+          Text: { Data: payload.text, Charset: 'UTF-8' },
+        },
+      },
+    },
+    ConfigurationSetName: 'commune-sending',
+  }));
 
-  if (error) {
-    logger.error('Failed to send email:', { error });
-    throw error;
-  }
-
-  return data;
+  return { id: res.MessageId };
 };
 
 export class UserService {

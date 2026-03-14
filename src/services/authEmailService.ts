@@ -1,8 +1,11 @@
-import resend from './resendClient';
+import sesClient from './sesClient';
+import { SendEmailCommand } from '@aws-sdk/client-sesv2';
+import logger from '../utils/logger';
 
 const APP_NAME = process.env.APP_NAME || 'Commune';
 const EMAIL_FROM = process.env.AUTH_EMAIL_FROM || process.env.DEFAULT_FROM_EMAIL || 'no-reply@commune.email';
 const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || 'http://localhost:3000';
+const CONFIG_SET = 'commune-sending';
 
 export const sendVerificationEmail = async ({ to, token }: { to: string; token: string }) => {
   const verifyUrl = `${FRONTEND_BASE_URL.replace(/\/$/, '')}/verify?token=${token}`;
@@ -16,10 +19,21 @@ export const sendVerificationEmail = async ({ to, token }: { to: string; token: 
     </div>
   `;
 
-  return resend.emails.send({
-    from: EMAIL_FROM,
-    to,
-    subject: `Verify your ${APP_NAME} email`,
-    html,
-  } as any);
+  try {
+    const res = await sesClient.send(new SendEmailCommand({
+      FromEmailAddress: EMAIL_FROM,
+      Destination: { ToAddresses: [to] },
+      Content: {
+        Simple: {
+          Subject: { Data: `Verify your ${APP_NAME} email`, Charset: 'UTF-8' },
+          Body: { Html: { Data: html, Charset: 'UTF-8' } },
+        },
+      },
+      ConfigurationSetName: CONFIG_SET,
+    }));
+    return { data: { id: res.MessageId }, error: null };
+  } catch (err: any) {
+    logger.error('Failed to send verification email', { to, error: err?.message });
+    return { data: null, error: { message: err?.message || 'Failed to send verification email' } };
+  }
 };

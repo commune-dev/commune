@@ -3,7 +3,6 @@ import express from 'express';
 import compression from 'compression';
 import healthRoutes from './routes/health';
 import statusRoutes from './routes/status';
-import webhookRoutes from './routes/webhooks';
 import domainRoutes from './routes/dashboard/domains';
 import inboxRoutes from './routes/dashboard/inboxes';
 import messageRoutes from './routes/dashboard/messages';
@@ -109,7 +108,6 @@ app.use(statusRoutes);
 app.use('/unsubscribe', unsubscribeRoutes);
 
 // Webhook routes mounted BEFORE JSON parser to preserve raw body for signature verification
-app.use('/api/webhooks/resend', webhookRoutes);
 app.use('/api/webhooks/ses', sesWebhookRoutes);
 app.use('/api/webhooks', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
 
