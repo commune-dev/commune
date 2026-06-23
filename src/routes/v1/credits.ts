@@ -24,6 +24,7 @@ const CheckoutSchema = z.object({
   bundle: z.enum(['starter', 'growth', 'scale']),
   success_url: z.string().url().optional(),
   cancel_url: z.string().url().optional(),
+  endorsely_referral: z.string().optional(),
 });
 
 router.post('/checkout', async (req: any, res) => {
@@ -32,7 +33,7 @@ router.post('/checkout', async (req: any, res) => {
     return res.status(400).json({ error: 'Invalid request', details: parsed.error.flatten() });
   }
 
-  const { bundle, success_url, cancel_url } = parsed.data;
+  const { bundle, success_url, cancel_url, endorsely_referral } = parsed.data;
   const bundleConfig = CREDIT_BUNDLES[bundle];
 
   if (!bundleConfig.stripePriceId) {
@@ -57,6 +58,7 @@ router.post('/checkout', async (req: any, res) => {
         purchase_type: 'credits',
         bundle,
         credits: String(bundleConfig.credits),
+        ...(endorsely_referral ? { endorsely_referral } : {}),
       },
     });
 

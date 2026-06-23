@@ -69,7 +69,7 @@ router.post('/billing/create-checkout-session', async (req: Request, res: Respon
     const orgId = (req as any).orgId;
     if (!orgId) return res.status(401).json({ error: 'Not authenticated' });
 
-    const { plan, billingCycle, returnUrl } = req.body;
+    const { plan, billingCycle, returnUrl, endorsely_referral } = req.body;
 
     if (!plan || !billingCycle) {
       return res.status(400).json({ error: 'Plan and billing cycle are required' });
@@ -108,7 +108,15 @@ router.post('/billing/create-checkout-session', async (req: Request, res: Respon
       success_url: `${baseReturnUrl}?payment=success&plan=${plan}&cycle=${billingCycle}`,
       cancel_url: `${baseReturnUrl}?payment=cancelled`,
       allow_promotion_codes: true,
-      metadata: { orgId, plan, billingCycle },
+      metadata: {
+        orgId,
+        plan,
+        billingCycle,
+        ...(endorsely_referral ? { endorsely_referral } : {}),
+      },
+      ...(endorsely_referral
+        ? { subscription_data: { metadata: { endorsely_referral } } }
+        : {}),
     };
 
     if (org?.stripe_customer_id) {
@@ -223,7 +231,7 @@ router.post('/billing/create-credits-checkout', async (req: Request, res: Respon
     const orgId = (req as any).orgId;
     if (!orgId) return res.status(401).json({ error: 'Not authenticated' });
 
-    const { bundle, returnUrl } = req.body;
+    const { bundle, returnUrl, endorsely_referral } = req.body;
     if (!bundle || !CREDIT_BUNDLES[bundle]) {
       return res.status(400).json({ error: 'Invalid bundle. Choose: starter, growth, scale' });
     }
@@ -252,6 +260,7 @@ router.post('/billing/create-credits-checkout', async (req: Request, res: Respon
         purchase_type: 'credits',
         credits: String(bundleConfig.credits),
         bundle,
+        ...(endorsely_referral ? { endorsely_referral } : {}),
       },
     };
 
